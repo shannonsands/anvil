@@ -1,0 +1,26 @@
+# Capability And Sandbox Model
+
+The canonical planning note is:
+
+`/Users/shannon/Workspace/Workspace/Obsidian/Global/Projects/anvil-language-runtime/capability-and-sandbox-model.md`
+
+Implementation-facing decision:
+
+- Sandbox Anvil language processes inside the runtime itself.
+- Treat the model like WASM imports and opaque handles applied to VM processes:
+  no ambient host authority, explicit resource imports, bounded execution,
+  precise denials, revocation, and audit.
+- Do not make Docker, Firecracker, OS jails, or other external sandboxes part of
+  the core design. They may be deployment layers later, but the runtime must be
+  coherent without them.
+- Every process has principal, trust zone, profile, concrete capabilities,
+  imports, handle table, budgets, module generations, private stack/frames,
+  mailbox, and audit stream.
+- Effective authority is the intersection of runtime policy, principal/group,
+  trust zone, profile, module manifest, resource policy, delegation, approvals,
+  budgets, and revocation state.
+- Native Rust host adapters are trusted runtime code. Keep them small, typed,
+  capability-aware, and audited.
+
+Open implementation dependency: finish the value representation and resource
+handle decisions before encoding this in Rust types.
