@@ -8,6 +8,20 @@ Feature: Reader-backed REPL
     Then the response contains one datum
     And the first datum prints as "(define answer 42)"
 
+  Scenario: Round-trip multiple top-level datums
+    Given the agent input
+      """
+      (define answer 42)
+      [answer {:ok true}]
+      """
+    When the reader-backed REPL reads the input
+    Then the response contains 2 datums
+    And the datums print as
+      """
+      (define answer 42)
+      [answer {:ok true}]
+      """
+
   Scenario: Parse Clojure-like reader delimiters
     Given the agent input
       """

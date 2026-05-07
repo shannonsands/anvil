@@ -170,6 +170,14 @@ pub fn read_source(source: &str) -> ReaderResult<Vec<SpannedDatum>> {
     Parser::new(lexed.tokens, lexed.eof).parse_all()
 }
 
+pub fn format_datums(datums: &[SpannedDatum]) -> String {
+    datums
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LexedSource {
     tokens: Vec<Token>,
@@ -634,9 +642,21 @@ mod tests {
 
         assert_eq!(datums.len(), 1);
         assert_eq!(
-            datums[0].to_string(),
+            format_datums(&datums),
             "(define answer [1 2 {:ok true}] 'answer)"
         );
+    }
+
+    #[test]
+    fn round_trips_multiple_top_level_datums() {
+        let source = "(define answer 42)\n[answer {:ok true}]";
+        let datums = read_source(source).unwrap();
+        let formatted = format_datums(&datums);
+        let reparsed = read_source(&formatted).unwrap();
+
+        assert_eq!(datums.len(), 2);
+        assert_eq!(formatted, source);
+        assert_eq!(format_datums(&reparsed), source);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anvil_core::{ReplInteraction, ReplResponse, ReplSession, read_repl_input};
+use anvil_core::{ReplInteraction, ReplResponse, ReplSession, format_datums, read_repl_input};
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
 #[derive(Debug, Default, cucumber::World)]
@@ -105,12 +105,21 @@ async fn repl_session_waiting_for_more_input(world: &mut AnvilWorld) {
 
 #[then("the response contains one datum")]
 async fn response_contains_one_datum(world: &mut AnvilWorld) {
+    assert_response_datum_count(world, 1);
+}
+
+#[then(expr = "the response contains {int} datums")]
+async fn response_contains_n_datums(world: &mut AnvilWorld, expected: usize) {
+    assert_response_datum_count(world, expected);
+}
+
+fn assert_response_datum_count(world: &mut AnvilWorld, expected: usize) {
     let response = world
         .repl_response
         .as_ref()
         .expect("reader-backed REPL response");
 
-    assert_eq!(response.datums().len(), 1);
+    assert_eq!(response.datums().len(), expected);
 }
 
 #[then(expr = "the first datum prints as {string}")]
@@ -133,6 +142,17 @@ fn assert_first_datum_prints_as(world: &mut AnvilWorld, expected: &str) {
     let first = response.datums().first().expect("first datum");
 
     assert_eq!(first.to_string(), expected);
+}
+
+#[then("the datums print as")]
+async fn datums_print_as_docstring(world: &mut AnvilWorld, #[step] step: &Step) {
+    let expected = trim_docstring(step.docstring().expect("expected datums docstring"));
+    let response = world
+        .repl_response
+        .as_ref()
+        .expect("reader-backed REPL response");
+
+    assert_eq!(format_datums(response.datums()), expected);
 }
 
 fn trim_docstring(value: &str) -> &str {

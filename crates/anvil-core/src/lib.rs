@@ -1,7 +1,9 @@
 pub mod reader;
 pub mod repl;
 
-pub use reader::{Datum, ReaderDiagnostic, SourceLocation, SourceSpan, SpannedDatum, read_source};
+pub use reader::{
+    Datum, ReaderDiagnostic, SourceLocation, SourceSpan, SpannedDatum, format_datums, read_source,
+};
 pub use repl::{ReplInteraction, ReplResponse, ReplSession, read_repl_input};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
