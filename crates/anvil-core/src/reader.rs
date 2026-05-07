@@ -2,82 +2,13 @@ use std::fmt;
 
 use serde::Serialize;
 
+use crate::{
+    diagnostic::{Diagnostic, DiagnosticPhase, DiagnosticSpec},
+    source::{SourceLocation, SourceSpan, SourceText},
+};
+
+pub type ReaderDiagnostic = Diagnostic;
 pub type ReaderResult<T> = Result<T, Box<ReaderDiagnostic>>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct SourceLocation {
-    pub offset: usize,
-    pub line: usize,
-    pub column: usize,
-}
-
-impl SourceLocation {
-    fn start() -> Self {
-        Self {
-            offset: 0,
-            line: 1,
-            column: 1,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct SourceSpan {
-    pub start: SourceLocation,
-    pub end: SourceLocation,
-}
-
-impl SourceSpan {
-    fn new(start: SourceLocation, end: SourceLocation) -> Self {
-        Self { start, end }
-    }
-
-    fn point(location: SourceLocation) -> Self {
-        Self {
-            start: location,
-            end: location,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ReaderDiagnostic {
-    pub code: &'static str,
-    pub message: String,
-    pub span: SourceSpan,
-    pub expected: Vec<String>,
-    pub actual: Option<String>,
-    pub suggestion: Option<String>,
-}
-
-impl ReaderDiagnostic {
-    fn new(
-        code: &'static str,
-        message: impl Into<String>,
-        span: SourceSpan,
-        expected: Vec<String>,
-        actual: Option<String>,
-        suggestion: Option<String>,
-    ) -> Box<Self> {
-        Box::new(Self {
-            code,
-            message: message.into(),
-            span,
-            expected,
-            actual,
-            suggestion,
-        })
-    }
-
-    pub fn is_incomplete_input(&self) -> bool {
-        matches!(
-            self.code,
-            "ANVIL_READER_UNCLOSED_DELIMITER"
-                | "ANVIL_READER_UNTERMINATED_STRING"
-                | "ANVIL_READER_QUOTE_WITHOUT_DATUM"
-        )
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SpannedDatum {
@@ -166,8 +97,12 @@ fn escape_string(value: &str) -> String {
 }
 
 pub fn read_source(source: &str) -> ReaderResult<Vec<SpannedDatum>> {
+    read_source_text(&SourceText::repl(source))
+}
+
+pub fn read_source_text(source: &SourceText) -> ReaderResult<Vec<SpannedDatum>> {
     let lexed = lex_source(source)?;
-    Parser::new(lexed.tokens, lexed.eof).parse_all()
+    Parser::new(source, lexed.tokens, lexed.eof).parse_all()
 }
 
 pub fn format_datums(datums: &[SpannedDatum]) -> String {
@@ -224,8 +159,8 @@ impl Delimiter {
     }
 }
 
-fn lex_source(source: &str) -> ReaderResult<LexedSource> {
-    let chars: Vec<(usize, char)> = source.char_indices().collect();
+fn lex_source(source: &SourceText) -> ReaderResult<LexedSource> {
+    let chars: Vec<(usize, char)> = source.text().char_indices().collect();
     let mut tokens = Vec::new();
     let mut index = 0;
     let mut location = SourceLocation::start();
@@ -286,7 +221,13 @@ fn lex_source(source: &str) -> ReaderResult<LexedSource> {
                 &mut location,
                 start,
             )?),
-            _ => tokens.push(read_atom(source, &chars, &mut index, &mut location, start)),
+            _ => tokens.push(read_atom(
+                source.text(),
+                &chars,
+                &mut index,
+                &mut location,
+                start,
+            )),
         }
     }
 
@@ -304,7 +245,7 @@ fn token(kind: TokenKind, start: SourceLocation, end: SourceLocation) -> Token {
 }
 
 fn read_string(
-    source: &str,
+    source: &SourceText,
     chars: &[(usize, char)],
     index: &mut usize,
     location: &mut SourceLocation,
@@ -324,14 +265,18 @@ fn read_string(
             '\\' => {
                 advance(chars, index, location);
                 if *index >= chars.len() {
-                    return Err(ReaderDiagnostic::new(
-                        "ANVIL_READER_UNTERMINATED_STRING",
-                        "string escape reaches end of input",
-                        SourceSpan::new(start, *location),
-                        vec!["escaped character".to_string()],
-                        Some("end of input".to_string()),
-                        Some("Add an escaped character or close the string.".to_string()),
-                    ));
+                    return Err(Diagnostic::new(DiagnosticSpec {
+                        phase: DiagnosticPhase::Reader,
+                        code: "ANVIL_READER_UNTERMINATED_STRING",
+                        source,
+                        message: "string escape reaches end of input".to_string(),
+                        span: SourceSpan::new(start, *location),
+                        expected: vec!["escaped character".to_string()],
+                        actual: Some("end of input".to_string()),
+                        suggestion: Some(
+                            "Add an escaped character or close the string.".to_string(),
+                        ),
+                    }));
                 }
 
                 let (_, escaped) = chars[*index];
@@ -342,20 +287,27 @@ fn read_string(
                     '"' => '"',
                     '\\' => '\\',
                     other => {
-                        return Err(ReaderDiagnostic::new(
-                            "ANVIL_READER_UNKNOWN_ESCAPE",
-                            format!("unknown string escape \\{other}"),
-                            SourceSpan::new(*location, next_location(source, chars, *index)),
-                            vec![
+                        return Err(Diagnostic::new(DiagnosticSpec {
+                            phase: DiagnosticPhase::Reader,
+                            code: "ANVIL_READER_UNKNOWN_ESCAPE",
+                            source,
+                            message: format!("unknown string escape \\{other}"),
+                            span: SourceSpan::new(
+                                *location,
+                                next_location(source.text(), chars, *index),
+                            ),
+                            expected: vec![
                                 "n".to_string(),
                                 "r".to_string(),
                                 "t".to_string(),
                                 "\"".to_string(),
                                 "\\".to_string(),
                             ],
-                            Some(other.to_string()),
-                            Some("Use a supported escape or remove the backslash.".to_string()),
-                        ));
+                            actual: Some(other.to_string()),
+                            suggestion: Some(
+                                "Use a supported escape or remove the backslash.".to_string(),
+                            ),
+                        }));
                     }
                 };
                 value.push(escaped_value);
@@ -368,14 +320,16 @@ fn read_string(
         }
     }
 
-    Err(ReaderDiagnostic::new(
-        "ANVIL_READER_UNTERMINATED_STRING",
-        "string literal is missing a closing quote",
-        SourceSpan::new(start, *location),
-        vec!["\"".to_string()],
-        Some("end of input".to_string()),
-        Some("Add a closing quote.".to_string()),
-    ))
+    Err(Diagnostic::new(DiagnosticSpec {
+        phase: DiagnosticPhase::Reader,
+        code: "ANVIL_READER_UNTERMINATED_STRING",
+        source,
+        message: "string literal is missing a closing quote".to_string(),
+        span: SourceSpan::new(start, *location),
+        expected: vec!["\"".to_string()],
+        actual: Some("end of input".to_string()),
+        suggestion: Some("Add a closing quote.".to_string()),
+    }))
 }
 
 fn read_atom(
@@ -436,15 +390,17 @@ fn next_location(source: &str, chars: &[(usize, char)], index: usize) -> SourceL
     location
 }
 
-struct Parser {
+struct Parser<'source> {
+    source: &'source SourceText,
     tokens: Vec<Token>,
     cursor: usize,
     eof: SourceLocation,
 }
 
-impl Parser {
-    fn new(tokens: Vec<Token>, eof: SourceLocation) -> Self {
+impl<'source> Parser<'source> {
+    fn new(source: &'source SourceText, tokens: Vec<Token>, eof: SourceLocation) -> Self {
         Self {
+            source,
             tokens,
             cursor: 0,
             eof,
@@ -464,28 +420,32 @@ impl Parser {
 
         match token.kind {
             TokenKind::Open(delimiter) => self.parse_collection(delimiter, token.span),
-            TokenKind::Close(delimiter) => Err(ReaderDiagnostic::new(
-                "ANVIL_READER_UNEXPECTED_DELIMITER",
-                format!("unexpected closing delimiter {}", delimiter.close()),
-                token.span,
-                vec!["datum".to_string()],
-                Some(delimiter.close().to_string()),
-                Some(format!(
+            TokenKind::Close(delimiter) => Err(Diagnostic::new(DiagnosticSpec {
+                phase: DiagnosticPhase::Reader,
+                code: "ANVIL_READER_UNEXPECTED_DELIMITER",
+                source: self.source,
+                message: format!("unexpected closing delimiter {}", delimiter.close()),
+                span: token.span,
+                expected: vec!["datum".to_string()],
+                actual: Some(delimiter.close().to_string()),
+                suggestion: Some(format!(
                     "Remove this {} or add a matching {} earlier.",
                     delimiter.close(),
                     delimiter.open()
                 )),
-            )),
+            })),
             TokenKind::Quote => {
                 if self.cursor >= self.tokens.len() {
-                    return Err(ReaderDiagnostic::new(
-                        "ANVIL_READER_QUOTE_WITHOUT_DATUM",
-                        "quote marker is missing a datum",
-                        token.span,
-                        vec!["datum".to_string()],
-                        Some("end of input".to_string()),
-                        Some("Add a datum after the quote marker.".to_string()),
-                    ));
+                    return Err(Diagnostic::new(DiagnosticSpec {
+                        phase: DiagnosticPhase::Reader,
+                        code: "ANVIL_READER_QUOTE_WITHOUT_DATUM",
+                        source: self.source,
+                        message: "quote marker is missing a datum".to_string(),
+                        span: token.span,
+                        expected: vec!["datum".to_string()],
+                        actual: Some("end of input".to_string()),
+                        suggestion: Some("Add a datum after the quote marker.".to_string()),
+                    }));
                 }
                 let quoted = self.parse_datum()?;
                 let span = SourceSpan::new(token.span.start, quoted.span.end);
@@ -514,35 +474,39 @@ impl Parser {
 
         loop {
             if self.cursor >= self.tokens.len() {
-                return Err(ReaderDiagnostic::new(
-                    "ANVIL_READER_UNCLOSED_DELIMITER",
-                    format!(
+                return Err(Diagnostic::new(DiagnosticSpec {
+                    phase: DiagnosticPhase::Reader,
+                    code: "ANVIL_READER_UNCLOSED_DELIMITER",
+                    source: self.source,
+                    message: format!(
                         "{} is missing closing delimiter {}",
                         delimiter.open(),
                         delimiter.close()
                     ),
-                    SourceSpan::new(open_span.start, self.eof),
-                    vec![delimiter.close().to_string()],
-                    Some("end of input".to_string()),
-                    Some(format!("Add a matching {}.", delimiter.close())),
-                ));
+                    span: SourceSpan::new(open_span.start, self.eof),
+                    expected: vec![delimiter.close().to_string()],
+                    actual: Some("end of input".to_string()),
+                    suggestion: Some(format!("Add a matching {}.", delimiter.close())),
+                }));
             }
 
             if let TokenKind::Close(close_delimiter) = self.tokens[self.cursor].kind {
                 let close = self.next_token()?;
                 if close_delimiter != delimiter {
-                    return Err(ReaderDiagnostic::new(
-                        "ANVIL_READER_MISMATCHED_DELIMITER",
-                        format!(
+                    return Err(Diagnostic::new(DiagnosticSpec {
+                        phase: DiagnosticPhase::Reader,
+                        code: "ANVIL_READER_MISMATCHED_DELIMITER",
+                        source: self.source,
+                        message: format!(
                             "expected closing delimiter {}, found {}",
                             delimiter.close(),
                             close_delimiter.close()
                         ),
-                        close.span,
-                        vec![delimiter.close().to_string()],
-                        Some(close_delimiter.close().to_string()),
-                        Some(format!("Replace it with {}.", delimiter.close())),
-                    ));
+                        span: close.span,
+                        expected: vec![delimiter.close().to_string()],
+                        actual: Some(close_delimiter.close().to_string()),
+                        suggestion: Some(format!("Replace it with {}.", delimiter.close())),
+                    }));
                 }
 
                 let span = SourceSpan::new(open_span.start, close.span.end);
@@ -564,14 +528,18 @@ impl Parser {
             Delimiter::Vector => Datum::Vector(items),
             Delimiter::Map => {
                 if !items.len().is_multiple_of(2) {
-                    return Err(ReaderDiagnostic::new(
-                        "ANVIL_READER_ODD_MAP",
-                        "map literal requires an even number of forms",
+                    return Err(Diagnostic::new(DiagnosticSpec {
+                        phase: DiagnosticPhase::Reader,
+                        code: "ANVIL_READER_ODD_MAP",
+                        source: self.source,
+                        message: "map literal requires an even number of forms".to_string(),
                         span,
-                        vec!["key value pairs".to_string()],
-                        Some(format!("{} form(s)", items.len())),
-                        Some("Add a value for the final key or remove the final key.".to_string()),
-                    ));
+                        expected: vec!["key value pairs".to_string()],
+                        actual: Some(format!("{} form(s)", items.len())),
+                        suggestion: Some(
+                            "Add a value for the final key or remove the final key.".to_string(),
+                        ),
+                    }));
                 }
 
                 let pairs = items
@@ -587,14 +555,16 @@ impl Parser {
 
     fn next_token(&mut self) -> ReaderResult<Token> {
         let token = self.tokens.get(self.cursor).cloned().ok_or_else(|| {
-            ReaderDiagnostic::new(
-                "ANVIL_READER_UNEXPECTED_EOF",
-                "expected a datum, found end of input",
-                SourceSpan::point(self.eof),
-                vec!["datum".to_string()],
-                Some("end of input".to_string()),
-                None,
-            )
+            Diagnostic::new(DiagnosticSpec {
+                phase: DiagnosticPhase::Reader,
+                code: "ANVIL_READER_UNEXPECTED_EOF",
+                source: self.source,
+                message: "expected a datum, found end of input".to_string(),
+                span: SourceSpan::point(self.eof),
+                expected: vec!["datum".to_string()],
+                actual: Some("end of input".to_string()),
+                suggestion: None,
+            })
         })?;
         self.cursor += 1;
         Ok(token)

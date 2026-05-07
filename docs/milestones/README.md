@@ -32,6 +32,13 @@ Exit criteria:
 - Draft overlay representation.
 - Module diagnostics with spans.
 
+Current slice:
+
+- Core AST lowering exists for literals, symbols, quote, `define`, `if`, `do`,
+  `fn`/`lambda`, calls, vectors, and maps.
+- Syntax diagnostics reuse the shared diagnostic envelope with
+  `phase: syntax`.
+
 ## M3: Bytecode VM Foundation
 
 Exit criteria:

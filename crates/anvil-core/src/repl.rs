@@ -16,7 +16,7 @@ pub enum ReplResponse {
         evaluation: EvaluationStatus,
     },
     Error {
-        diagnostic: ReaderDiagnostic,
+        diagnostic: Box<ReaderDiagnostic>,
     },
 }
 
@@ -24,7 +24,7 @@ pub enum ReplResponse {
 pub enum ReplInteraction {
     Complete(ReplResponse),
     Pending {
-        diagnostic: ReaderDiagnostic,
+        diagnostic: Box<ReaderDiagnostic>,
         buffered_lines: usize,
     },
 }
@@ -65,7 +65,7 @@ impl ReplInteraction {
     pub fn diagnostic(&self) -> Option<&ReaderDiagnostic> {
         match self {
             Self::Complete(response) => response.diagnostic(),
-            Self::Pending { diagnostic, .. } => Some(diagnostic),
+            Self::Pending { diagnostic, .. } => Some(diagnostic.as_ref()),
         }
     }
 }
@@ -81,7 +81,7 @@ impl ReplResponse {
     pub fn diagnostic(&self) -> Option<&ReaderDiagnostic> {
         match self {
             Self::Read { .. } => None,
-            Self::Error { diagnostic } => Some(diagnostic),
+            Self::Error { diagnostic } => Some(diagnostic.as_ref()),
         }
     }
 }
@@ -113,9 +113,8 @@ impl ReplSession {
                 })
             }
             Err(diagnostic) => {
-                let diagnostic = *diagnostic;
                 if diagnostic.is_incomplete_input() {
-                    self.pending = Some(diagnostic.clone());
+                    self.pending = Some((*diagnostic).clone());
                     ReplInteraction::Pending {
                         diagnostic,
                         buffered_lines: self.buffered_lines,
@@ -131,8 +130,9 @@ impl ReplSession {
     }
 
     pub fn finish(self) -> Option<ReplResponse> {
-        self.pending
-            .map(|diagnostic| ReplResponse::Error { diagnostic })
+        self.pending.map(|diagnostic| ReplResponse::Error {
+            diagnostic: Box::new(diagnostic),
+        })
     }
 
     pub fn is_pending(&self) -> bool {
@@ -146,9 +146,7 @@ pub fn read_repl_input(source: &str) -> ReplResponse {
             datums,
             evaluation: EvaluationStatus::NotImplemented,
         },
-        Err(diagnostic) => ReplResponse::Error {
-            diagnostic: *diagnostic,
-        },
+        Err(diagnostic) => ReplResponse::Error { diagnostic },
     }
 }
 

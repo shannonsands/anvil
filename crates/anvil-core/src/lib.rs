@@ -1,10 +1,22 @@
+pub mod ast;
+pub mod diagnostic;
 pub mod reader;
 pub mod repl;
+pub mod source;
 
+pub use ast::{
+    AstDiagnostic, AstKind, AstLiteral, AstMapEntry, SpannedAst, format_ast, lower_datums,
+    lower_source, lower_source_text,
+};
+pub use diagnostic::{
+    Diagnostic, DiagnosticCodeFrame, DiagnosticLabel, DiagnosticPhase, DiagnosticSeverity,
+    DiagnosticSuggestion,
+};
 pub use reader::{
-    Datum, ReaderDiagnostic, SourceLocation, SourceSpan, SpannedDatum, format_datums, read_source,
+    Datum, ReaderDiagnostic, SpannedDatum, format_datums, read_source, read_source_text,
 };
 pub use repl::{ReplInteraction, ReplResponse, ReplSession, read_repl_input};
+pub use source::{SourceLocation, SourceSpan, SourceText};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectShape {

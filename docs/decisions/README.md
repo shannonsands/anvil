@@ -21,9 +21,10 @@ matter to code structure.
 - Runtime-internal process sandboxing is the core security model: WASM-style
   imports and handles for Anvil processes, without relying on Docker,
   Firecracker, or OS containers.
-- Agent-facing diagnostics use a concise default response envelope with opt-in
-  drill-down facets for spans, expansion traces, effects, denials, frames,
-  audit, artifacts, and suggestions.
+- Agent-facing diagnostics use a concise default response envelope with
+  structured facets. The first concrete reader diagnostic includes source id,
+  severity, phase, primary span, labels, expected/actual values, suggestions,
+  and code-frame rendering; syntax diagnostics now reuse the same envelope.
 - Embedded-first host API: Rust hosts register functions, resources, modules,
   async calls, streams, actors/services, profiles, capabilities, budgets, event
   topics, and devices; TypeScript and other environments use the public runtime
@@ -47,6 +48,9 @@ matter to code structure.
 - Initial reader grammar: Lisp reader with `()`, `[]`, `{}`, strings, comments,
   quote sugar, keywords, nil, booleans, integers, floats, symbols, ordered maps,
   spans, and structured diagnostics.
+- Initial core AST lowering covers literals, symbols, quote, `define`, `if`,
+  `do`, `fn`/`lambda`, calls, vectors, and maps, preserving spans and emitting
+  syntax-phase diagnostics.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 

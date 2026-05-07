@@ -34,7 +34,10 @@ The first executable acceptance harness is intentionally tiny but real:
   `cargo test -p anvil-acceptance --test acceptance`.
 - `reader_repl.feature` covers the first REPL-visible reader behavior,
   Clojure-like delimiters, multiline interactive input, JSON pending events,
-  and JSON-serializable diagnostics.
+  JSON-serializable diagnostics, and source-aware diagnostic rendering.
+- `ast_lowering.feature` covers the first syntax layer behavior: lowering
+  definition and function forms, serializing AST JSON, and returning
+  syntax-phase diagnostics.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as

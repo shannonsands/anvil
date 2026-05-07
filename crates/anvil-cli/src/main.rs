@@ -5,7 +5,8 @@ use std::{
 };
 
 use anvil_core::{
-    ReaderDiagnostic, ReplInteraction, ReplResponse, ReplSession, project_shape, read_repl_input,
+    ReaderDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst, lower_source,
+    project_shape, read_repl_input,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,13 @@ fn main() -> ExitCode {
             }
         },
         Some("read") => match read_command(args.collect()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("anvil: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("ast") => match ast_command(args.collect()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("anvil: {error}");
@@ -59,6 +67,9 @@ fn print_help() {
     println!("Commands:");
     println!("  repl          Start the reader-backed REPL. Evaluation is not implemented yet.");
     println!("  read [SOURCE] Read SOURCE as Anvil datums, or read stdin when SOURCE is omitted.");
+    println!(
+        "  ast [SOURCE]  Lower SOURCE to the initial core AST, or read stdin when SOURCE is omitted."
+    );
     println!();
     println!("Options:");
     println!("  --json        Emit one JSON response object per input.");
@@ -139,7 +150,28 @@ fn read_command(args: Vec<String>) -> io::Result<()> {
     Ok(())
 }
 
+fn ast_command(args: Vec<String>) -> io::Result<()> {
+    let (format, args) = split_source_args(args)?;
+    let source = if args.is_empty() {
+        let mut source = String::new();
+        io::stdin().read_to_string(&mut source)?;
+        source
+    } else {
+        args.join(" ")
+    };
+
+    match lower_source(&source) {
+        Ok(expressions) => print_ast_response(&expressions, format)?,
+        Err(diagnostic) => print_command_diagnostic(&diagnostic, format)?,
+    }
+    Ok(())
+}
+
 fn split_read_args(args: Vec<String>) -> io::Result<(OutputFormat, Vec<String>)> {
+    split_source_args(args)
+}
+
+fn split_source_args(args: Vec<String>) -> io::Result<(OutputFormat, Vec<String>)> {
     let mut format = OutputFormat::Text;
     let mut source_args = Vec::new();
 
@@ -152,6 +184,48 @@ fn split_read_args(args: Vec<String>) -> io::Result<(OutputFormat, Vec<String>)>
     }
 
     Ok((format, source_args))
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum AstCommandResponse<'a> {
+    Ast { expressions: &'a [SpannedAst] },
+    Error { diagnostic: &'a ReaderDiagnostic },
+}
+
+fn print_ast_response(expressions: &[SpannedAst], format: OutputFormat) -> io::Result<()> {
+    match format {
+        OutputFormat::Text => {
+            if expressions.is_empty() {
+                println!("ok ast");
+            }
+            for expression in expressions {
+                println!("ast {expression}");
+            }
+        }
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string(&AstCommandResponse::Ast { expressions })?
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn print_command_diagnostic(diagnostic: &ReaderDiagnostic, format: OutputFormat) -> io::Result<()> {
+    match format {
+        OutputFormat::Text => print_diagnostic(diagnostic),
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string(&AstCommandResponse::Error { diagnostic })?
+            );
+        }
+    }
+
+    Ok(())
 }
 
 fn print_response(response: &ReplResponse, format: OutputFormat) -> io::Result<()> {
@@ -192,21 +266,5 @@ fn print_text_response(response: &ReplResponse) -> io::Result<()> {
 }
 
 fn print_diagnostic(diagnostic: &ReaderDiagnostic) {
-    println!("error {}: {}", diagnostic.code, diagnostic.message);
-    println!(
-        "span {}:{}-{}:{}",
-        diagnostic.span.start.line,
-        diagnostic.span.start.column,
-        diagnostic.span.end.line,
-        diagnostic.span.end.column
-    );
-    if !diagnostic.expected.is_empty() {
-        println!("expected {}", diagnostic.expected.join(", "));
-    }
-    if let Some(actual) = &diagnostic.actual {
-        println!("actual {actual}");
-    }
-    if let Some(suggestion) = &diagnostic.suggestion {
-        println!("suggestion {suggestion}");
-    }
+    println!("{}", diagnostic.render_code_frame());
 }

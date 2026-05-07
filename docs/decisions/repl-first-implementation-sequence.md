@@ -43,3 +43,7 @@ Concrete order:
 
 Non-goal for the first REPL: evaluating code. Early output should be honest
 about being read-only until AST lowering and bytecode execution exist.
+
+Current implementation has reached step 5 for the first subset: literals,
+symbols, quote, `define`, `if`, `do`, `fn`/`lambda`, calls, vectors, and maps.
+Evaluation remains intentionally absent.

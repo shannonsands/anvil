@@ -62,3 +62,16 @@ Feature: Reader-backed REPL
     And the REPL response is serialized as JSON
     Then the JSON status is "error"
     And the JSON diagnostic code is "ANVIL_READER_UNCLOSED_DELIMITER"
+    And the JSON diagnostic source id is "repl"
+    And the JSON diagnostic severity is "error"
+    And the JSON diagnostic phase is "reader"
+    And the JSON diagnostic primary span starts at line 1 column 1
+    And the JSON diagnostic has 1 suggestion
+
+  Scenario: Render a source-aware reader diagnostic
+    Given the agent input "(define answer 42"
+    When the reader-backed REPL reads the input
+    And the reader diagnostic is rendered as text
+    Then the rendered diagnostic contains "--> repl:1:1"
+    And the rendered diagnostic contains "1 | (define answer 42"
+    And the rendered diagnostic contains "suggestion Add a matching )."
