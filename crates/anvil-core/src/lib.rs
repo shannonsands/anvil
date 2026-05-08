@@ -3,6 +3,7 @@ pub mod diagnostic;
 pub mod reader;
 pub mod repl;
 pub mod source;
+pub mod syntax;
 
 pub use ast::{
     AstDiagnostic, AstKind, AstLiteral, AstMapEntry, SpannedAst, format_ast, lower_datums,
@@ -17,6 +18,10 @@ pub use reader::{
 };
 pub use repl::{ReplInteraction, ReplResponse, ReplSession, read_repl_input};
 pub use source::{SourceLocation, SourceSpan, SourceText};
+pub use syntax::{
+    SyntaxContext, SyntaxDiagnostic, SyntaxObject, format_syntax_objects, syntax_from_datums,
+    syntax_from_source, syntax_from_source_text,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectShape {

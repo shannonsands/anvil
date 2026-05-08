@@ -51,6 +51,8 @@ matter to code structure.
 - Initial core AST lowering covers literals, symbols, quote, `define`, `if`,
   `do`, `fn`/`lambda`, calls, vectors, and maps, preserving spans and emitting
   syntax-phase diagnostics.
+- Initial syntax objects wrap reader datums with deterministic ids, source ids,
+  spans, and empty hygiene context fields for future scopes and marks.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 

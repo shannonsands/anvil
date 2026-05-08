@@ -36,6 +36,8 @@ Current slice:
 
 - Core AST lowering exists for literals, symbols, quote, `define`, `if`, `do`,
   `fn`/`lambda`, calls, vectors, and maps.
+- Syntax objects exist as a span-preserving wrapper around reader datums, with
+  deterministic ids and initial hygiene context fields.
 - Syntax diagnostics reuse the shared diagnostic envelope with
   `phase: syntax`.
 

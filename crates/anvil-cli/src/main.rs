@@ -5,8 +5,8 @@ use std::{
 };
 
 use anvil_core::{
-    ReaderDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst, lower_source,
-    project_shape, read_repl_input,
+    ReaderDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxObject,
+    lower_source, project_shape, read_repl_input, syntax_from_source,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +26,13 @@ fn main() -> ExitCode {
             }
         },
         Some("read") => match read_command(args.collect()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("anvil: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("syntax") => match syntax_command(args.collect()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("anvil: {error}");
@@ -67,6 +74,9 @@ fn print_help() {
     println!("Commands:");
     println!("  repl          Start the reader-backed REPL. Evaluation is not implemented yet.");
     println!("  read [SOURCE] Read SOURCE as Anvil datums, or read stdin when SOURCE is omitted.");
+    println!(
+        "  syntax [SOURCE] Wrap SOURCE as syntax objects, or read stdin when SOURCE is omitted."
+    );
     println!(
         "  ast [SOURCE]  Lower SOURCE to the initial core AST, or read stdin when SOURCE is omitted."
     );
@@ -150,6 +160,23 @@ fn read_command(args: Vec<String>) -> io::Result<()> {
     Ok(())
 }
 
+fn syntax_command(args: Vec<String>) -> io::Result<()> {
+    let (format, args) = split_source_args(args)?;
+    let source = if args.is_empty() {
+        let mut source = String::new();
+        io::stdin().read_to_string(&mut source)?;
+        source
+    } else {
+        args.join(" ")
+    };
+
+    match syntax_from_source(&source) {
+        Ok(objects) => print_syntax_response(&objects, format)?,
+        Err(diagnostic) => print_syntax_diagnostic(&diagnostic, format)?,
+    }
+    Ok(())
+}
+
 fn ast_command(args: Vec<String>) -> io::Result<()> {
     let (format, args) = split_source_args(args)?;
     let source = if args.is_empty() {
@@ -191,6 +218,48 @@ fn split_source_args(args: Vec<String>) -> io::Result<(OutputFormat, Vec<String>
 enum AstCommandResponse<'a> {
     Ast { expressions: &'a [SpannedAst] },
     Error { diagnostic: &'a ReaderDiagnostic },
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum SyntaxCommandResponse<'a> {
+    Syntax { objects: &'a [SyntaxObject] },
+    Error { diagnostic: &'a ReaderDiagnostic },
+}
+
+fn print_syntax_response(objects: &[SyntaxObject], format: OutputFormat) -> io::Result<()> {
+    match format {
+        OutputFormat::Text => {
+            if objects.is_empty() {
+                println!("ok syntax");
+            }
+            for object in objects {
+                println!("syntax {object}");
+            }
+        }
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string(&SyntaxCommandResponse::Syntax { objects })?
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn print_syntax_diagnostic(diagnostic: &ReaderDiagnostic, format: OutputFormat) -> io::Result<()> {
+    match format {
+        OutputFormat::Text => print_diagnostic(diagnostic),
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string(&SyntaxCommandResponse::Error { diagnostic })?
+            );
+        }
+    }
+
+    Ok(())
 }
 
 fn print_ast_response(expressions: &[SpannedAst], format: OutputFormat) -> io::Result<()> {

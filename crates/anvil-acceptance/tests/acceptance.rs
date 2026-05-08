@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use anvil_core::{
-    AstDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst, format_ast,
-    format_datums, lower_source, read_repl_input,
+    AstDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic,
+    SyntaxObject, format_ast, format_datums, lower_source, read_repl_input, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -17,6 +17,8 @@ struct AnvilWorld {
     rendered_diagnostic: Option<String>,
     ast: Option<Vec<SpannedAst>>,
     ast_diagnostic: Option<Box<AstDiagnostic>>,
+    syntax_objects: Option<Vec<SyntaxObject>>,
+    syntax_diagnostic: Option<Box<SyntaxDiagnostic>>,
 }
 
 #[given("a fresh Anvil planning scaffold")]
@@ -45,6 +47,8 @@ async fn agent_input(world: &mut AnvilWorld, source: String) {
     world.json_response = None;
     world.ast = None;
     world.ast_diagnostic = None;
+    world.syntax_objects = None;
+    world.syntax_diagnostic = None;
 }
 
 #[given("the agent input")]
@@ -54,11 +58,27 @@ async fn agent_doc_input(world: &mut AnvilWorld, #[step] step: &Step) {
     world.json_response = None;
     world.ast = None;
     world.ast_diagnostic = None;
+    world.syntax_objects = None;
+    world.syntax_diagnostic = None;
 }
 
 #[when("the reader-backed REPL reads the input")]
 async fn reader_repl_reads_input(world: &mut AnvilWorld) {
     world.repl_response = Some(read_repl_input(&world.source));
+}
+
+#[when("the syntax object layer wraps the input")]
+async fn syntax_object_layer_wraps_input(world: &mut AnvilWorld) {
+    match syntax_from_source(&world.source) {
+        Ok(objects) => {
+            world.syntax_objects = Some(objects);
+            world.syntax_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.syntax_objects = None;
+            world.syntax_diagnostic = Some(diagnostic);
+        }
+    }
 }
 
 #[when("the syntax layer lowers the input")]
@@ -113,6 +133,19 @@ async fn ast_response_is_serialized_as_json(world: &mut AnvilWorld) {
     world.json_response = Some(serde_json::json!({
         "status": "ast",
         "expressions": ast,
+    }));
+}
+
+#[when("the syntax object response is serialized as JSON")]
+async fn syntax_object_response_is_serialized_as_json(world: &mut AnvilWorld) {
+    let objects = world
+        .syntax_objects
+        .as_ref()
+        .expect("syntax object response");
+
+    world.json_response = Some(serde_json::json!({
+        "status": "syntax",
+        "objects": objects,
     }));
 }
 
@@ -222,6 +255,58 @@ async fn first_ast_prints_as(world: &mut AnvilWorld, expected: String) {
     assert_eq!(format_ast(ast), expected);
 }
 
+#[then(expr = "the syntax object count is {int}")]
+async fn syntax_object_count_is(world: &mut AnvilWorld, expected: usize) {
+    let objects = world
+        .syntax_objects
+        .as_ref()
+        .expect("syntax object response");
+
+    assert_eq!(objects.len(), expected);
+}
+
+#[then(expr = "the first syntax object id is {string}")]
+async fn first_syntax_object_id_is(world: &mut AnvilWorld, expected: String) {
+    let object = first_syntax_object(world);
+
+    assert_eq!(object.id, expected);
+}
+
+#[then(expr = "the first syntax object source id is {string}")]
+async fn first_syntax_object_source_id_is(world: &mut AnvilWorld, expected: String) {
+    let object = first_syntax_object(world);
+
+    assert_eq!(object.source_id, expected);
+}
+
+#[then(expr = "the first syntax object span starts at line {int} column {int}")]
+async fn first_syntax_object_span_starts_at(
+    world: &mut AnvilWorld,
+    expected_line: usize,
+    expected_column: usize,
+) {
+    let object = first_syntax_object(world);
+
+    assert_eq!(object.span.start.line, expected_line);
+    assert_eq!(object.span.start.column, expected_column);
+}
+
+#[then(expr = "the first syntax object datum prints as {string}")]
+async fn first_syntax_object_datum_prints_as(world: &mut AnvilWorld, expected: String) {
+    let object = first_syntax_object(world);
+
+    assert_eq!(object.to_string(), expected);
+}
+
+fn first_syntax_object(world: &mut AnvilWorld) -> &SyntaxObject {
+    world
+        .syntax_objects
+        .as_ref()
+        .expect("syntax object response")
+        .first()
+        .expect("first syntax object")
+}
+
 fn trim_docstring(value: &str) -> &str {
     value.trim_matches('\n')
 }
@@ -317,6 +402,26 @@ async fn json_first_ast_kind_is(world: &mut AnvilWorld, expected: String) {
     assert_eq!(json["expressions"][0]["kind"], expected);
 }
 
+#[then(expr = "the JSON first syntax context has {int} scopes")]
+async fn json_first_syntax_context_has_scopes(world: &mut AnvilWorld, expected: usize) {
+    let json = world.json_response.as_ref().expect("JSON response");
+    let scopes = json["objects"][0]["context"]["scopes"]
+        .as_array()
+        .expect("syntax context scopes");
+
+    assert_eq!(scopes.len(), expected);
+}
+
+#[then(expr = "the JSON first syntax context has {int} marks")]
+async fn json_first_syntax_context_has_marks(world: &mut AnvilWorld, expected: usize) {
+    let json = world.json_response.as_ref().expect("JSON response");
+    let marks = json["objects"][0]["context"]["marks"]
+        .as_array()
+        .expect("syntax context marks");
+
+    assert_eq!(marks.len(), expected);
+}
+
 #[then(expr = "the syntax diagnostic code is {string}")]
 async fn syntax_diagnostic_code_is(world: &mut AnvilWorld, expected: String) {
     let diagnostic = world.ast_diagnostic.as_ref().expect("syntax diagnostic");
@@ -327,6 +432,27 @@ async fn syntax_diagnostic_code_is(world: &mut AnvilWorld, expected: String) {
 #[then(expr = "the syntax diagnostic phase is {string}")]
 async fn syntax_diagnostic_phase_is(world: &mut AnvilWorld, expected: String) {
     let diagnostic = world.ast_diagnostic.as_ref().expect("syntax diagnostic");
+    let json = serde_json::to_value(diagnostic).expect("diagnostic JSON");
+
+    assert_eq!(json["phase"], expected);
+}
+
+#[then(expr = "the syntax object diagnostic code is {string}")]
+async fn syntax_object_diagnostic_code_is(world: &mut AnvilWorld, expected: String) {
+    let diagnostic = world
+        .syntax_diagnostic
+        .as_ref()
+        .expect("syntax object diagnostic");
+
+    assert_eq!(diagnostic.code, expected);
+}
+
+#[then(expr = "the syntax object diagnostic phase is {string}")]
+async fn syntax_object_diagnostic_phase_is(world: &mut AnvilWorld, expected: String) {
+    let diagnostic = world
+        .syntax_diagnostic
+        .as_ref()
+        .expect("syntax object diagnostic");
     let json = serde_json::to_value(diagnostic).expect("diagnostic JSON");
 
     assert_eq!(json["phase"], expected);
