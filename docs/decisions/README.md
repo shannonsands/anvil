@@ -94,6 +94,9 @@ matter to code structure.
   handle table, operation schema, open/delegate requests, use-site
   authorization, denial diagnostics, audit events, and resource acceptance
   specs.
+- Initial resource adapter execution contract exists in `anvil-core`: adapter
+  trait, operation request/payload/outcome, execution modes, effect records,
+  checked dispatch, and adapter-backed acceptance specs.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 
@@ -105,8 +108,8 @@ matter to code structure.
 - Concrete persistent collection layouts, root-table implementation details,
   GC tuning, and later generational/incremental/compacting collector strategy
   beyond the initial tracing-GC contract.
-- Resource adapter trait and execution contract for pure/effectful/blocking,
-  async, streaming, actor-backed, and device-backed resource operations.
+- Async, streaming, blocking, actor-backed, and device-backed runners behind
+  the initial resource adapter execution contract.
 - Capability-profile integration for resource opening, operation grants,
   delegation, revocation, and audit sinks.
 - Concrete runtime syntax for `defactor`, supervisors, atoms, channels,

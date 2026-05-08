@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::{
     diagnostic::{Diagnostic, DiagnosticPhase, DiagnosticSpec},
     source::{SourceLocation, SourceSpan, SourceText},
+    vm::Value,
 };
 
 pub type ResourceDiagnostic = Diagnostic;
@@ -416,6 +417,35 @@ impl ResourceRegistry {
         })
     }
 
+    pub fn execute_operation<A: ResourceAdapter + ?Sized>(
+        &self,
+        table: &HandleTable,
+        adapter: &mut A,
+        request: ResourceOperationRequest,
+    ) -> ResourceResult<ResourceOperationOutcome> {
+        let authorization = self.check_operation(table, &request.handle_id, &request.operation)?;
+        let handle = self.handle_or_error(table, &request.handle_id, &request.operation)?;
+        self.ensure_adapter_matches(adapter, &authorization, handle)?;
+
+        let execution_mode = adapter.execution_mode(&authorization.operation);
+        let adapter_request = ResourceAdapterRequest {
+            authorization: &authorization,
+            handle,
+            payload: request.payload,
+            execution_mode,
+        };
+        let adapter_outcome = adapter
+            .execute(adapter_request)
+            .map_err(|failure| adapter_failure_error(&authorization, handle, failure))?;
+
+        Ok(ResourceOperationOutcome {
+            audit_events: vec![authorization.audit_event.clone()],
+            authorization,
+            execution_mode,
+            adapter: adapter_outcome,
+        })
+    }
+
     pub fn delegate_handle(
         &self,
         table: &mut HandleTable,
@@ -649,6 +679,45 @@ impl ResourceRegistry {
             missing_capability: None,
         }))
     }
+
+    fn ensure_adapter_matches<A: ResourceAdapter + ?Sized>(
+        &self,
+        adapter: &A,
+        authorization: &ResourceOperationAuthorization,
+        handle: &HandleEntry,
+    ) -> ResourceResult<()> {
+        if adapter.type_id() != authorization.type_id {
+            return Err(ResourceError::new(ResourceErrorSpec {
+                reason: ResourceDenialReason::WrongResourceType,
+                operation: &authorization.operation,
+                handle_id: Some(&authorization.handle_id),
+                resource_id: Some(&authorization.resource_id),
+                type_id: Some(&authorization.type_id),
+                holder: Some(&handle.holder),
+                trust_zone: Some(&handle.trust_zone),
+                expected: vec![authorization.type_id.clone()],
+                actual: Some(adapter.type_id()),
+                missing_capability: None,
+            }));
+        }
+
+        if adapter.supports_operation(&authorization.operation) {
+            return Ok(());
+        }
+
+        Err(ResourceError::new(ResourceErrorSpec {
+            reason: ResourceDenialReason::OperationUnsupported,
+            operation: &authorization.operation,
+            handle_id: Some(&authorization.handle_id),
+            resource_id: Some(&authorization.resource_id),
+            type_id: Some(&authorization.type_id),
+            holder: Some(&handle.holder),
+            trust_zone: Some(&handle.trust_zone),
+            expected: adapter.supported_operations(),
+            actual: Some(&authorization.operation),
+            missing_capability: None,
+        }))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -715,6 +784,204 @@ pub struct ResourceOperationAuthorization {
     pub type_id: String,
     pub capability: String,
     pub audit_event: ResourceAuditEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ResourceOperationRequest {
+    pub handle_id: String,
+    pub operation: String,
+    pub payload: ResourceOperationPayload,
+}
+
+impl ResourceOperationRequest {
+    pub fn new(handle_id: impl Into<String>, operation: impl Into<String>) -> Self {
+        Self {
+            handle_id: handle_id.into(),
+            operation: operation.into(),
+            payload: ResourceOperationPayload::default(),
+        }
+    }
+
+    pub fn with_argument(mut self, value: Value) -> Self {
+        self.payload.arguments.push(value);
+        self
+    }
+
+    pub fn with_option(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.payload.options.insert(key.into(), value);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ResourceOperationPayload {
+    pub arguments: Vec<Value>,
+    pub options: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ResourceOperationOutcome {
+    pub authorization: ResourceOperationAuthorization,
+    pub execution_mode: ResourceExecutionMode,
+    pub adapter: ResourceAdapterOutcome,
+    pub audit_events: Vec<ResourceAuditEvent>,
+}
+
+pub type ResourceAdapterResult = Result<ResourceAdapterOutcome, ResourceAdapterFailure>;
+
+pub trait ResourceAdapter {
+    fn adapter_id(&self) -> &str;
+
+    fn type_id(&self) -> &str;
+
+    fn supported_operations(&self) -> Vec<String>;
+
+    fn execution_mode(&self, _operation: &str) -> ResourceExecutionMode {
+        ResourceExecutionMode::Effectful
+    }
+
+    fn supports_operation(&self, operation: &str) -> bool {
+        self.supported_operations()
+            .iter()
+            .any(|candidate| candidate == operation)
+    }
+
+    fn execute(&mut self, request: ResourceAdapterRequest<'_>) -> ResourceAdapterResult;
+}
+
+#[derive(Debug)]
+pub struct ResourceAdapterRequest<'resource> {
+    pub authorization: &'resource ResourceOperationAuthorization,
+    pub handle: &'resource HandleEntry,
+    pub payload: ResourceOperationPayload,
+    pub execution_mode: ResourceExecutionMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceExecutionMode {
+    Pure,
+    Effectful,
+    Blocking,
+    Async,
+    Streaming,
+    ActorBacked,
+    DeviceBacked,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ResourceAdapterOutcome {
+    pub status: ResourceAdapterStatus,
+    pub value: Value,
+    pub continuation: Option<String>,
+    pub effects: Vec<ResourceEffectRecord>,
+}
+
+impl ResourceAdapterOutcome {
+    pub fn completed(value: Value) -> Self {
+        Self {
+            status: ResourceAdapterStatus::Completed,
+            value,
+            continuation: None,
+            effects: Vec::new(),
+        }
+    }
+
+    pub fn pending(continuation: impl Into<String>) -> Self {
+        Self {
+            status: ResourceAdapterStatus::Pending,
+            value: Value::Nil,
+            continuation: Some(continuation.into()),
+            effects: Vec::new(),
+        }
+    }
+
+    pub fn streaming(stream_id: impl Into<String>) -> Self {
+        Self {
+            status: ResourceAdapterStatus::Streaming,
+            value: Value::Nil,
+            continuation: Some(stream_id.into()),
+            effects: Vec::new(),
+        }
+    }
+
+    pub fn cancelled() -> Self {
+        Self {
+            status: ResourceAdapterStatus::Cancelled,
+            value: Value::Nil,
+            continuation: None,
+            effects: Vec::new(),
+        }
+    }
+
+    pub fn with_effect(mut self, effect: ResourceEffectRecord) -> Self {
+        self.effects.push(effect);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceAdapterStatus {
+    Completed,
+    Pending,
+    Streaming,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResourceEffectRecord {
+    pub effect: ResourceEffect,
+    pub resource_id: String,
+    pub operation: String,
+    pub committed: bool,
+}
+
+impl ResourceEffectRecord {
+    pub fn new(
+        effect: ResourceEffect,
+        resource_id: impl Into<String>,
+        operation: impl Into<String>,
+    ) -> Self {
+        Self {
+            effect,
+            resource_id: resource_id.into(),
+            operation: operation.into(),
+            committed: false,
+        }
+    }
+
+    pub fn committed(mut self) -> Self {
+        self.committed = true;
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResourceAdapterFailure {
+    pub message: String,
+    pub expected: Vec<String>,
+    pub actual: Option<String>,
+}
+
+impl ResourceAdapterFailure {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            expected: Vec::new(),
+            actual: None,
+        }
+    }
+
+    pub fn with_expected(mut self, expected: impl Into<String>) -> Self {
+        self.expected.push(expected.into());
+        self
+    }
+
+    pub fn with_actual(mut self, actual: impl Into<String>) -> Self {
+        self.actual = Some(actual.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -961,6 +1228,32 @@ fn handle_denial(
     })
 }
 
+fn adapter_failure_error(
+    authorization: &ResourceOperationAuthorization,
+    handle: &HandleEntry,
+    failure: ResourceAdapterFailure,
+) -> Box<ResourceError> {
+    let expected = if failure.expected.is_empty() {
+        vec!["adapter operation completed".to_string()]
+    } else {
+        failure.expected
+    };
+    let actual = failure.actual.unwrap_or(failure.message);
+
+    ResourceError::new(ResourceErrorSpec {
+        reason: ResourceDenialReason::AdapterFailure,
+        operation: &authorization.operation,
+        handle_id: Some(&authorization.handle_id),
+        resource_id: Some(&authorization.resource_id),
+        type_id: Some(&authorization.type_id),
+        holder: Some(&handle.holder),
+        trust_zone: Some(&handle.trust_zone),
+        expected,
+        actual: Some(&actual),
+        missing_capability: None,
+    })
+}
+
 fn resource_diagnostic(
     reason: ResourceDenialReason,
     operation: &str,
@@ -1148,6 +1441,124 @@ mod tests {
         assert_eq!(error.denial.reason, ResourceDenialReason::HandleRevoked);
     }
 
+    #[test]
+    fn executes_authorized_operations_through_adapters() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let handle = registry
+            .open_handle(
+                &mut table,
+                ResourceOpenRequest::new("agent.alpha", "markodb:papers", vec!["read".into()]),
+            )
+            .expect("handle");
+        let mut adapter = TestAdapter::new("markodb.adapter", "markodb.collection", ["read"])
+            .with_value(Value::String("paper-count".to_string()));
+
+        let outcome = registry
+            .execute_operation(
+                &table,
+                &mut adapter,
+                ResourceOperationRequest::new(&handle.handle_id, "read")
+                    .with_argument(Value::Keyword("count".to_string())),
+            )
+            .expect("operation outcome");
+
+        assert_eq!(adapter.calls, 1);
+        assert_eq!(
+            adapter.last_argument,
+            Some(Value::Keyword("count".to_string()))
+        );
+        assert_eq!(outcome.authorization.capability, "read");
+        assert_eq!(outcome.execution_mode, ResourceExecutionMode::Effectful);
+        assert_eq!(outcome.adapter.status, ResourceAdapterStatus::Completed);
+        assert_eq!(
+            outcome.adapter.value,
+            Value::String("paper-count".to_string())
+        );
+        assert_eq!(
+            outcome.audit_events[0].decision,
+            ResourceAuditDecision::Allowed
+        );
+    }
+
+    #[test]
+    fn denies_before_adapter_execution() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let handle = registry
+            .open_handle(
+                &mut table,
+                ResourceOpenRequest::new("agent.alpha", "markodb:papers", vec!["read".into()]),
+            )
+            .expect("handle");
+        let mut adapter = TestAdapter::new("markodb.adapter", "markodb.collection", ["write"]);
+
+        let error = registry
+            .execute_operation(
+                &table,
+                &mut adapter,
+                ResourceOperationRequest::new(&handle.handle_id, "write"),
+            )
+            .expect_err("missing write grant");
+
+        assert_eq!(adapter.calls, 0);
+        assert_eq!(error.denial.reason, ResourceDenialReason::MissingCapability);
+    }
+
+    #[test]
+    fn rejects_wrong_adapter_type_before_execution() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let handle = registry
+            .open_handle(
+                &mut table,
+                ResourceOpenRequest::new("agent.alpha", "markodb:papers", vec!["read".into()]),
+            )
+            .expect("handle");
+        let mut adapter = TestAdapter::new("file.adapter", "file.root", ["read"]);
+
+        let error = registry
+            .execute_operation(
+                &table,
+                &mut adapter,
+                ResourceOperationRequest::new(&handle.handle_id, "read"),
+            )
+            .expect_err("wrong adapter type");
+
+        assert_eq!(adapter.calls, 0);
+        assert_eq!(error.denial.reason, ResourceDenialReason::WrongResourceType);
+    }
+
+    #[test]
+    fn maps_adapter_failures_to_resource_diagnostics() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let handle = registry
+            .open_handle(
+                &mut table,
+                ResourceOpenRequest::new("agent.alpha", "markodb:papers", vec!["read".into()]),
+            )
+            .expect("handle");
+        let mut adapter = TestAdapter::new("markodb.adapter", "markodb.collection", ["read"])
+            .with_failure(
+                ResourceAdapterFailure::new("backend timeout")
+                    .with_expected("adapter result")
+                    .with_actual("timeout"),
+            );
+
+        let error = registry
+            .execute_operation(
+                &table,
+                &mut adapter,
+                ResourceOperationRequest::new(&handle.handle_id, "read"),
+            )
+            .expect_err("adapter failure");
+
+        assert_eq!(adapter.calls, 1);
+        assert_eq!(error.denial.reason, ResourceDenialReason::AdapterFailure);
+        assert_eq!(error.diagnostic.phase, DiagnosticPhase::Resource);
+    }
+
     fn sample_registry() -> ResourceRegistry {
         let mut registry = ResourceRegistry::new();
         registry.register(
@@ -1163,5 +1574,77 @@ mod tests {
             .with_delegation_policy(HandleDelegationPolicy::NarrowOnly),
         );
         registry
+    }
+
+    #[derive(Debug, Clone)]
+    struct TestAdapter {
+        adapter_id: String,
+        type_id: String,
+        operations: Vec<String>,
+        value: Value,
+        failure: Option<ResourceAdapterFailure>,
+        calls: usize,
+        last_argument: Option<Value>,
+    }
+
+    impl TestAdapter {
+        fn new(
+            adapter_id: impl Into<String>,
+            type_id: impl Into<String>,
+            operations: impl IntoIterator<Item = impl Into<String>>,
+        ) -> Self {
+            Self {
+                adapter_id: adapter_id.into(),
+                type_id: type_id.into(),
+                operations: operations.into_iter().map(Into::into).collect(),
+                value: Value::Nil,
+                failure: None,
+                calls: 0,
+                last_argument: None,
+            }
+        }
+
+        fn with_value(mut self, value: Value) -> Self {
+            self.value = value;
+            self
+        }
+
+        fn with_failure(mut self, failure: ResourceAdapterFailure) -> Self {
+            self.failure = Some(failure);
+            self
+        }
+    }
+
+    impl ResourceAdapter for TestAdapter {
+        fn adapter_id(&self) -> &str {
+            &self.adapter_id
+        }
+
+        fn type_id(&self) -> &str {
+            &self.type_id
+        }
+
+        fn supported_operations(&self) -> Vec<String> {
+            self.operations.clone()
+        }
+
+        fn execute(&mut self, request: ResourceAdapterRequest<'_>) -> ResourceAdapterResult {
+            self.calls += 1;
+            self.last_argument = request.payload.arguments.first().cloned();
+
+            if let Some(failure) = self.failure.clone() {
+                return Err(failure);
+            }
+
+            Ok(
+                ResourceAdapterOutcome::completed(self.value.clone()).with_effect(
+                    ResourceEffectRecord::new(
+                        ResourceEffect::Read,
+                        &request.authorization.resource_id,
+                        &request.authorization.operation,
+                    ),
+                ),
+            )
+        }
     }
 }

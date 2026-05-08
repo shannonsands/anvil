@@ -20,6 +20,10 @@ Implementation-facing decision:
   `docs/decisions/resource-handles.md`: handles are typed, opaque,
   supervisor-issued, use-site checked, narrowed on delegation, and never raw
   Rust object access.
+- Resource adapter execution follows
+  `docs/decisions/resource-adapter-execution.md`: runtime checks happen before
+  adapter calls, and adapter outcomes/failures return through structured
+  resource envelopes.
 - The facade should not expose GC objects, scheduler internals, raw frames, raw
   Rust pointers, or unmediated host resources.
 - Ordinary language failures, denials, approvals, timeouts, and budget

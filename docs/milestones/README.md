@@ -99,3 +99,8 @@ Current implementation slice:
 - `anvil-core` now has initial resource registry, handle table, operation
   schema, authorization, denial, and audit event structs.
 - `resource_handles.feature` covers the first executable resource contract.
+- `anvil-core` now has the first resource adapter trait and checked dispatch
+  trampoline, including operation payloads, outcomes, execution modes, effect
+  records, and adapter failure mapping.
+- `resource_adapters.feature` covers authorized adapter execution, denial
+  before adapter calls, and adapter failure diagnostics.

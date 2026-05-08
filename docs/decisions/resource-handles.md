@@ -36,17 +36,21 @@ Implemented in this slice:
   revocation enums.
 - `ResourceOpenRequest` and `ResourceDelegationRequest`.
 - `ResourceOperationAuthorization` for allowed use-site checks.
+- `ResourceAdapter` and `ResourceRegistry::execute_operation` for the first
+  checked adapter dispatch contract.
 - `ResourceError`, `ResourceDenial`, `ResourceDenialReason`, and
   `ResourceAuditEvent`.
 - `DiagnosticPhase::Resource` for structured denial diagnostics.
 - Unit tests and `specs/resource_handles.feature` covering typed open,
   redacted display, missing-capability denial, narrowed delegation, rejected
   widening, and revocation.
+- `specs/resource_adapters.feature` covering checked adapter execution,
+  denial before adapter calls, and adapter failure diagnostics.
 
 Not implemented yet:
 
-- Real host/resource adapters.
-- Async/blocking/streaming resource execution.
+- Real host/resource adapters behind the trait.
+- Async/blocking/streaming resource runners.
 - Capability-profile integration beyond handle grants.
 - Transport, TypeScript, or WASM facade token stores.
 - Persistent audit sinks.

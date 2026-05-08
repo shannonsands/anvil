@@ -70,6 +70,9 @@ The first executable acceptance harness is intentionally tiny but real:
 - `resource_handles.feature` covers the first resource-handle substrate:
   typed open, redacted display, use-site missing-capability denials, narrowed
   delegation, rejected widening, and revocation.
+- `resource_adapters.feature` covers the first adapter-backed execution
+  contract: checked dispatch after authorization, denial before adapter calls,
+  structured adapter outcomes, and adapter failure diagnostics.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as

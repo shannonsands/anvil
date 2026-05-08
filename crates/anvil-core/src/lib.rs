@@ -39,11 +39,14 @@ pub use reader::{
 pub use repl::{ReplInteraction, ReplResponse, ReplSession, read_repl_input};
 pub use resource::{
     HandleDelegationPolicy, HandleDisplayPolicy, HandleEntry, HandleRevocationState, HandleTable,
-    ResourceAuditDecision, ResourceAuditEvent, ResourceAuditKind, ResourceAuditPolicy,
-    ResourceBudgetPolicy, ResourceDebugPolicy, ResourceDelegationRequest, ResourceDenial,
-    ResourceDenialReason, ResourceDiagnostic, ResourceEffect, ResourceEntry, ResourceError,
-    ResourceLifetime, ResourceOpenRequest, ResourceOperationAuthorization, ResourceOperationSchema,
-    ResourcePolicy, ResourceRedactionPolicy, ResourceRegistry,
+    ResourceAdapter, ResourceAdapterFailure, ResourceAdapterOutcome, ResourceAdapterRequest,
+    ResourceAdapterResult, ResourceAdapterStatus, ResourceAuditDecision, ResourceAuditEvent,
+    ResourceAuditKind, ResourceAuditPolicy, ResourceBudgetPolicy, ResourceDebugPolicy,
+    ResourceDelegationRequest, ResourceDenial, ResourceDenialReason, ResourceDiagnostic,
+    ResourceEffect, ResourceEffectRecord, ResourceEntry, ResourceError, ResourceExecutionMode,
+    ResourceLifetime, ResourceOpenRequest, ResourceOperationAuthorization,
+    ResourceOperationOutcome, ResourceOperationPayload, ResourceOperationRequest,
+    ResourceOperationSchema, ResourcePolicy, ResourceRedactionPolicy, ResourceRegistry,
 };
 pub use source::{SourceLocation, SourceSpan, SourceText};
 pub use syntax::{

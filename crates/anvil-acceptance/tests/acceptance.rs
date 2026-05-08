@@ -9,11 +9,14 @@ use anvil_core::{
     AnvilManifest, AstDiagnostic, DraftOverlay, HandleDelegationPolicy, HandleEntry, HandleTable,
     ManifestDiagnostic, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
     PackageSnapshot, PackageSourceFile, ProjectDiagnostic, ReplInteraction, ReplResponse,
-    ReplSession, ResourceDelegationRequest, ResourceEntry, ResourceError, ResourceOpenRequest,
-    ResourceOperationAuthorization, ResourceRegistry, SpannedAst, SyntaxDiagnostic, SyntaxObject,
-    Vm, VmBudget, VmDiagnostic, VmOutput, compile_source, format_ast, format_datums,
-    load_package_snapshot, load_workspace_snapshot, lower_source, lower_source_with_resolver,
-    parse_manifest, read_repl_input, run_source, syntax_from_source,
+    ReplSession, ResourceAdapter, ResourceAdapterFailure, ResourceAdapterOutcome,
+    ResourceAdapterRequest, ResourceAdapterResult, ResourceDelegationRequest, ResourceEffect,
+    ResourceEffectRecord, ResourceEntry, ResourceError, ResourceExecutionMode, ResourceOpenRequest,
+    ResourceOperationAuthorization, ResourceOperationOutcome, ResourceOperationRequest,
+    ResourceRegistry, SpannedAst, SyntaxDiagnostic, SyntaxObject, Value, Vm, VmBudget,
+    VmDiagnostic, VmOutput, compile_source, format_ast, format_datums, load_package_snapshot,
+    load_workspace_snapshot, lower_source, lower_source_with_resolver, parse_manifest,
+    read_repl_input, run_source, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -47,6 +50,8 @@ struct AnvilWorld {
     resource_handle: Option<HandleEntry>,
     delegated_resource_handle: Option<HandleEntry>,
     resource_authorization: Option<ResourceOperationAuthorization>,
+    resource_adapter: Option<RecordingResourceAdapter>,
+    resource_operation_outcome: Option<ResourceOperationOutcome>,
     resource_error: Option<Box<ResourceError>>,
 }
 
@@ -78,6 +83,8 @@ async fn fresh_resource_registry(world: &mut AnvilWorld) {
     world.resource_handle = None;
     world.delegated_resource_handle = None;
     world.resource_authorization = None;
+    world.resource_adapter = None;
+    world.resource_operation_outcome = None;
     world.resource_error = None;
 }
 
@@ -97,6 +104,31 @@ async fn resource_exists_with_operations(
         resource.add_operation(operation.clone(), operation);
     }
     world.resource_registry.register(resource);
+}
+
+#[given(expr = "resource adapter {string} handles type {string} with operations {string}")]
+async fn resource_adapter_handles_type(
+    world: &mut AnvilWorld,
+    adapter_id: String,
+    type_id: String,
+    operations: String,
+) {
+    world.resource_adapter = Some(RecordingResourceAdapter::new(
+        adapter_id,
+        type_id,
+        split_csv(&operations),
+    ));
+    world.resource_operation_outcome = None;
+    world.resource_error = None;
+}
+
+#[given(expr = "the resource adapter will fail with {string}")]
+async fn resource_adapter_will_fail(world: &mut AnvilWorld, message: String) {
+    world
+        .resource_adapter
+        .as_mut()
+        .expect("resource adapter")
+        .failure = Some(ResourceAdapterFailure::new(message).with_expected("adapter result"));
 }
 
 #[given(expr = "a fresh draft overlay {string} owned by {string}")]
@@ -240,6 +272,39 @@ async fn holder_uses_resource_handle(world: &mut AnvilWorld, operation: String) 
         }
         Err(error) => {
             world.resource_authorization = None;
+            world.resource_error = Some(error);
+        }
+    }
+}
+
+#[when(
+    expr = "the holder executes resource operation {string} through the adapter returning {string}"
+)]
+async fn holder_executes_resource_operation_through_adapter(
+    world: &mut AnvilWorld,
+    operation: String,
+    value: String,
+) {
+    let handle_id = world
+        .resource_handle
+        .as_ref()
+        .expect("resource handle")
+        .handle_id
+        .clone();
+    let adapter = world.resource_adapter.as_mut().expect("resource adapter");
+    adapter.value = Value::String(value);
+
+    match world.resource_registry.execute_operation(
+        &world.resource_handle_table,
+        adapter,
+        ResourceOperationRequest::new(handle_id, operation),
+    ) {
+        Ok(outcome) => {
+            world.resource_operation_outcome = Some(outcome);
+            world.resource_error = None;
+        }
+        Err(error) => {
+            world.resource_operation_outcome = None;
             world.resource_error = Some(error);
         }
     }
@@ -1061,8 +1126,114 @@ async fn resource_audit_decision_is(world: &mut AnvilWorld, expected: String) {
     assert_eq!(decision, expected);
 }
 
+#[then(expr = "the resource operation audit decision is {string}")]
+async fn resource_operation_audit_decision_is(world: &mut AnvilWorld, expected: String) {
+    let outcome = resource_operation_outcome(world);
+    let audit_event = outcome.audit_events.first().expect("audit event");
+    let decision = serde_json::to_value(audit_event.decision).expect("decision JSON");
+
+    assert_eq!(decision, expected);
+}
+
+#[then(expr = "the resource adapter call count is {int}")]
+async fn resource_adapter_call_count_is(world: &mut AnvilWorld, expected: usize) {
+    let adapter = world.resource_adapter.as_ref().expect("resource adapter");
+
+    assert_eq!(adapter.calls, expected);
+}
+
+#[then(expr = "the resource adapter output status is {string}")]
+async fn resource_adapter_output_status_is(world: &mut AnvilWorld, expected: String) {
+    let outcome = resource_operation_outcome(world);
+    let status = serde_json::to_value(outcome.adapter.status).expect("status JSON");
+
+    assert_eq!(status, expected);
+}
+
+#[then(expr = "the resource adapter string value is {string}")]
+async fn resource_adapter_string_value_is(world: &mut AnvilWorld, expected: String) {
+    let outcome = resource_operation_outcome(world);
+
+    assert_eq!(outcome.adapter.value, Value::String(expected));
+}
+
+#[then(expr = "the resource execution mode is {string}")]
+async fn resource_execution_mode_is(world: &mut AnvilWorld, expected: String) {
+    let outcome = resource_operation_outcome(world);
+    let mode = serde_json::to_value(outcome.execution_mode).expect("execution mode JSON");
+
+    assert_eq!(mode, expected);
+}
+
+fn resource_operation_outcome(world: &mut AnvilWorld) -> &ResourceOperationOutcome {
+    world
+        .resource_operation_outcome
+        .as_ref()
+        .expect("resource operation outcome")
+}
+
 fn resource_error(world: &mut AnvilWorld) -> &ResourceError {
     world.resource_error.as_ref().expect("resource error")
+}
+
+#[derive(Debug, Clone)]
+struct RecordingResourceAdapter {
+    adapter_id: String,
+    type_id: String,
+    operations: Vec<String>,
+    value: Value,
+    failure: Option<ResourceAdapterFailure>,
+    calls: usize,
+}
+
+impl RecordingResourceAdapter {
+    fn new(adapter_id: String, type_id: String, operations: Vec<String>) -> Self {
+        Self {
+            adapter_id,
+            type_id,
+            operations,
+            value: Value::Nil,
+            failure: None,
+            calls: 0,
+        }
+    }
+}
+
+impl ResourceAdapter for RecordingResourceAdapter {
+    fn adapter_id(&self) -> &str {
+        &self.adapter_id
+    }
+
+    fn type_id(&self) -> &str {
+        &self.type_id
+    }
+
+    fn supported_operations(&self) -> Vec<String> {
+        self.operations.clone()
+    }
+
+    fn execution_mode(&self, _operation: &str) -> ResourceExecutionMode {
+        ResourceExecutionMode::Effectful
+    }
+
+    fn execute(&mut self, request: ResourceAdapterRequest<'_>) -> ResourceAdapterResult {
+        self.calls += 1;
+
+        if let Some(failure) = self.failure.clone() {
+            return Err(failure);
+        }
+
+        Ok(
+            ResourceAdapterOutcome::completed(self.value.clone()).with_effect(
+                ResourceEffectRecord::new(
+                    resource_effect_from_operation(&request.authorization.operation),
+                    &request.authorization.resource_id,
+                    &request.authorization.operation,
+                )
+                .committed(),
+            ),
+        )
+    }
 }
 
 fn trim_docstring(value: &str) -> &str {
@@ -1075,6 +1246,20 @@ fn split_csv(value: &str) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+fn resource_effect_from_operation(operation: &str) -> ResourceEffect {
+    match operation {
+        "read" => ResourceEffect::Read,
+        "write" => ResourceEffect::Write,
+        "stream" => ResourceEffect::Stream,
+        "inspect" => ResourceEffect::Inspect,
+        "delegate" => ResourceEffect::Delegate,
+        "close" => ResourceEffect::Close,
+        "revoke" => ResourceEffect::Revoke,
+        "open" | "import" => ResourceEffect::Import,
+        _ => ResourceEffect::Call,
+    }
 }
 
 fn create_temp_package_root() -> PathBuf {
