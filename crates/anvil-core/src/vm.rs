@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use serde::Serialize;
 
@@ -21,6 +21,7 @@ pub struct BytecodeProgram {
     pub source_id: String,
     pub register_count: usize,
     pub constants: Vec<Value>,
+    pub bindings: Vec<String>,
     pub instructions: Vec<BytecodeInstruction>,
     #[serde(skip)]
     source: SourceText,
@@ -53,6 +54,19 @@ pub enum Instruction {
     MakeMap {
         dst: usize,
         entries: Vec<MapRegisterEntry>,
+    },
+    LoadBinding {
+        dst: usize,
+        binding: usize,
+    },
+    DefineBinding {
+        binding: usize,
+        src: usize,
+    },
+    CallPrimitive {
+        dst: usize,
+        primitive: usize,
+        args: Vec<usize>,
     },
     JumpIfFalse {
         condition: usize,
@@ -263,6 +277,7 @@ impl<'source> Compiler<'source> {
                 source_id: source.id().to_string(),
                 register_count: 1,
                 constants: Vec::new(),
+                bindings: Vec::new(),
                 instructions: Vec::new(),
                 source: source.clone(),
             },
@@ -297,21 +312,20 @@ impl<'source> Compiler<'source> {
             AstKind::Vector { items } => self.compile_vector(items, dst, expression.span),
             AstKind::Map { entries } => self.compile_map(entries, dst, expression.span),
             AstKind::Do { expressions } => self.compile_do(expressions, dst, expression.span),
+            AstKind::Define { name, value } => {
+                self.compile_define(name, value, dst, expression.span)
+            }
             AstKind::If {
                 condition,
                 then_branch,
                 else_branch,
             } => self.compile_if(condition, then_branch, else_branch, dst, expression.span),
-            AstKind::Symbol { name } => Err(self.compile_error(CompileDiagnosticSpec {
-                code: "ANVIL_COMPILE_UNBOUND_SYMBOL",
-                message: format!("symbol {name} is not bound in the bootstrap VM"),
-                span: expression.span,
-                expected: vec!["literal or supported special form".to_string()],
-                actual: Some(format!("symbol {name}")),
-                suggestion: Some(
-                    "Define executable bindings after environments and calls land.".to_string(),
-                ),
-            })),
+            AstKind::Symbol { name } => {
+                let binding = self.intern_binding(name);
+                self.emit(Instruction::LoadBinding { dst, binding }, expression.span);
+                Ok(())
+            }
+            AstKind::Call { callee, args } => self.compile_call(callee, args, dst, expression.span),
             _ => Err(self.compile_error(CompileDiagnosticSpec {
                 code: "ANVIL_COMPILE_UNSUPPORTED_FORM",
                 message: "form is not executable in the bootstrap VM".to_string(),
@@ -322,6 +336,9 @@ impl<'source> Compiler<'source> {
                     "map".to_string(),
                     "do".to_string(),
                     "if".to_string(),
+                    "define".to_string(),
+                    "symbol".to_string(),
+                    "bootstrap primitive call".to_string(),
                 ],
                 actual: Some(ast_kind_name(&expression.kind).to_string()),
                 suggestion: Some(
@@ -330,6 +347,51 @@ impl<'source> Compiler<'source> {
                 ),
             })),
         }
+    }
+
+    fn compile_define(
+        &mut self,
+        name: &str,
+        value: &SpannedAst,
+        dst: usize,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        self.compile_expression(value, dst)?;
+        let binding = self.intern_binding(name);
+        self.emit(Instruction::DefineBinding { binding, src: dst }, span);
+        Ok(())
+    }
+
+    fn compile_call(
+        &mut self,
+        callee: &SpannedAst,
+        args: &[SpannedAst],
+        dst: usize,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        let AstKind::Symbol { name } = &callee.kind else {
+            return Err(self.unsupported_call_error(callee, span));
+        };
+        if !is_bootstrap_primitive(name) {
+            return Err(self.unsupported_call_error(callee, span));
+        }
+
+        let mut arg_registers = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg_register = self.allocate_register();
+            self.compile_expression(arg, arg_register)?;
+            arg_registers.push(arg_register);
+        }
+        let primitive = self.intern_binding(name);
+        self.emit(
+            Instruction::CallPrimitive {
+                dst,
+                primitive,
+                args: arg_registers,
+            },
+            span,
+        );
+        Ok(())
     }
 
     fn compile_vector(
@@ -428,6 +490,21 @@ impl<'source> Compiler<'source> {
         self.emit(Instruction::LoadConstant { dst, constant }, span);
     }
 
+    fn intern_binding(&mut self, name: &str) -> usize {
+        if let Some(index) = self
+            .program
+            .bindings
+            .iter()
+            .position(|binding| binding == name)
+        {
+            return index;
+        }
+
+        let index = self.program.bindings.len();
+        self.program.bindings.push(name.to_string());
+        index
+    }
+
     fn allocate_register(&mut self) -> usize {
         let register = self.next_register;
         self.next_register += 1;
@@ -456,6 +533,22 @@ impl<'source> Compiler<'source> {
         }
     }
 
+    fn unsupported_call_error(&self, callee: &SpannedAst, span: SourceSpan) -> Box<VmDiagnostic> {
+        Diagnostic::new(DiagnosticSpec {
+            code: "ANVIL_COMPILE_UNSUPPORTED_CALL",
+            phase: DiagnosticPhase::Compile,
+            source: self.source,
+            message: "call is not executable in the bootstrap VM".to_string(),
+            span,
+            expected: vec!["bootstrap primitive callee: +, -, *, or =".to_string()],
+            actual: Some(format!("{} callee", ast_kind_name(&callee.kind))),
+            suggestion: Some(
+                "Use a bootstrap numeric primitive, or wait for closures and function calls."
+                    .to_string(),
+            ),
+        })
+    }
+
     fn compile_error(&self, spec: CompileDiagnosticSpec) -> Box<VmDiagnostic> {
         Diagnostic::new(DiagnosticSpec {
             code: spec.code,
@@ -468,6 +561,10 @@ impl<'source> Compiler<'source> {
             suggestion: spec.suggestion,
         })
     }
+}
+
+fn is_bootstrap_primitive(name: &str) -> bool {
+    matches!(name, "+" | "-" | "*" | "=")
 }
 
 struct CompileDiagnosticSpec {
@@ -510,6 +607,7 @@ struct Interpreter<'program> {
     program: &'program BytecodeProgram,
     budget: VmBudget,
     registers: Vec<Value>,
+    bindings: BTreeMap<String, Value>,
     pc: usize,
     instructions_executed: usize,
 }
@@ -520,6 +618,7 @@ impl<'program> Interpreter<'program> {
             program,
             budget,
             registers: vec![Value::Nil; program.register_count],
+            bindings: BTreeMap::new(),
             pc: 0,
             instructions_executed: 0,
         }
@@ -531,41 +630,106 @@ impl<'program> Interpreter<'program> {
             self.consume_fuel(instruction.span)?;
             self.instructions_executed += 1;
 
-            match &instruction.instruction {
-                Instruction::LoadConstant { dst, constant } => {
-                    let value = self.constant(*constant, instruction.span)?.clone();
-                    self.set_register(*dst, value, instruction.span)?;
-                    self.pc += 1;
-                }
-                Instruction::MakeVector { dst, items } => {
-                    let value = self.build_vector(items, instruction.span)?;
-                    self.set_register(*dst, value, instruction.span)?;
-                    self.pc += 1;
-                }
-                Instruction::MakeMap { dst, entries } => {
-                    let value = self.build_map(entries, instruction.span)?;
-                    self.set_register(*dst, value, instruction.span)?;
-                    self.pc += 1;
-                }
-                Instruction::JumpIfFalse { condition, target } => {
-                    if self.register(*condition, instruction.span)?.is_truthy() {
-                        self.pc += 1;
-                    } else {
-                        self.jump_to(*target, instruction.span)?;
-                    }
-                }
-                Instruction::Jump { target } => {
-                    self.jump_to(*target, instruction.span)?;
-                }
-                Instruction::Return { src } => {
-                    let value = self.register(*src, instruction.span)?.clone();
-                    return Ok(VmOutput {
-                        value,
-                        instructions_executed: self.instructions_executed,
-                    });
-                }
+            if let Some(output) = self.execute_instruction(instruction)? {
+                return Ok(output);
             }
         }
+    }
+
+    fn execute_instruction(
+        &mut self,
+        instruction: BytecodeInstruction,
+    ) -> VmResult<Option<VmOutput>> {
+        let span = instruction.span;
+        match instruction.instruction {
+            Instruction::JumpIfFalse { condition, target } => {
+                self.execute_jump_if_false(condition, target, span)?;
+                Ok(None)
+            }
+            Instruction::Jump { target } => {
+                self.jump_to(target, span)?;
+                Ok(None)
+            }
+            Instruction::Return { src } => self.return_output(src, span).map(Some),
+            instruction => {
+                self.execute_value_instruction(instruction, span)?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn execute_value_instruction(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        match instruction {
+            Instruction::LoadConstant { dst, constant } => {
+                let value = self.constant(constant, span)?.clone();
+                self.set_register(dst, value, span)?;
+                self.pc += 1;
+                Ok(())
+            }
+            Instruction::MakeVector { dst, items } => {
+                let value = self.build_vector(&items, span)?;
+                self.set_register(dst, value, span)?;
+                self.pc += 1;
+                Ok(())
+            }
+            Instruction::MakeMap { dst, entries } => {
+                let value = self.build_map(&entries, span)?;
+                self.set_register(dst, value, span)?;
+                self.pc += 1;
+                Ok(())
+            }
+            Instruction::LoadBinding { dst, binding } => {
+                let value = self.load_binding(binding, span)?;
+                self.set_register(dst, value, span)?;
+                self.pc += 1;
+                Ok(())
+            }
+            Instruction::DefineBinding { binding, src } => {
+                let name = self.binding_name(binding, span)?.to_string();
+                let value = self.register(src, span)?.clone();
+                self.bindings.insert(name, value);
+                self.pc += 1;
+                Ok(())
+            }
+            Instruction::CallPrimitive {
+                dst,
+                primitive,
+                args,
+            } => {
+                let primitive_name = self.binding_name(primitive, span)?.to_string();
+                let value = self.call_primitive(&primitive_name, &args, span)?;
+                self.set_register(dst, value, span)?;
+                self.pc += 1;
+                Ok(())
+            }
+            _ => unreachable!("control instructions are handled by execute_instruction"),
+        }
+    }
+
+    fn execute_jump_if_false(
+        &mut self,
+        condition: usize,
+        target: usize,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        if self.register(condition, span)?.is_truthy() {
+            self.pc += 1;
+            return Ok(());
+        }
+
+        self.jump_to(target, span)
+    }
+
+    fn return_output(&self, src: usize, span: SourceSpan) -> VmResult<VmOutput> {
+        let value = self.register(src, span)?.clone();
+        Ok(VmOutput {
+            value,
+            instructions_executed: self.instructions_executed,
+        })
     }
 
     fn current_instruction(&self) -> VmResult<&BytecodeInstruction> {
@@ -622,6 +786,122 @@ impl<'program> Interpreter<'program> {
         Ok(Value::Map(values))
     }
 
+    fn load_binding(&self, binding: usize, span: SourceSpan) -> VmResult<Value> {
+        let name = self.binding_name(binding, span)?;
+        self.bindings.get(name).cloned().ok_or_else(|| {
+            self.runtime_error(
+                "ANVIL_RUNTIME_UNBOUND_SYMBOL",
+                format!("symbol {name} is not bound"),
+                span,
+                vec!["defined top-level binding".to_string()],
+                Some(format!("symbol {name}")),
+                Some("Define the symbol before reading it in this VM program.".to_string()),
+            )
+        })
+    }
+
+    fn call_primitive(&self, primitive: &str, args: &[usize], span: SourceSpan) -> VmResult<Value> {
+        let args = self.primitive_args(args, span)?;
+        match primitive {
+            "+" => self.primitive_add(&args, span),
+            "-" => self.primitive_subtract(&args, span),
+            "*" => self.primitive_multiply(&args, span),
+            "=" => self.primitive_numeric_equals(&args, span),
+            _ => Err(self.runtime_error(
+                "ANVIL_RUNTIME_UNKNOWN_PRIMITIVE",
+                format!("unknown bootstrap primitive {primitive}"),
+                span,
+                vec!["known bootstrap primitive".to_string()],
+                Some(primitive.to_string()),
+                Some("Report this as a compiler or bytecode construction bug.".to_string()),
+            )),
+        }
+    }
+
+    fn primitive_args(&self, args: &[usize], span: SourceSpan) -> VmResult<Vec<Value>> {
+        args.iter()
+            .map(|arg| self.register(*arg, span).cloned())
+            .collect()
+    }
+
+    fn primitive_add(&self, args: &[Value], span: SourceSpan) -> VmResult<Value> {
+        let mut sum = RuntimeNumber::Integer(0);
+        for (index, arg) in args.iter().enumerate() {
+            sum = sum.add(self.expect_number(arg, index, "+", span)?, span, self)?;
+        }
+        Ok(sum.into_value())
+    }
+
+    fn primitive_subtract(&self, args: &[Value], span: SourceSpan) -> VmResult<Value> {
+        let Some((first, rest)) = args.split_first() else {
+            return Err(self.runtime_error(
+                "ANVIL_RUNTIME_ARITY",
+                "- expects at least one operand".to_string(),
+                span,
+                vec!["one or more numeric operands".to_string()],
+                Some("0 operand(s)".to_string()),
+                Some("Pass a number to negate, or a left-hand value and subtrahends.".to_string()),
+            ));
+        };
+
+        let mut difference = self.expect_number(first, 0, "-", span)?;
+        if rest.is_empty() {
+            return difference.negate(span, self).map(RuntimeNumber::into_value);
+        }
+
+        for (index, arg) in rest.iter().enumerate() {
+            difference =
+                difference.subtract(self.expect_number(arg, index + 1, "-", span)?, span, self)?;
+        }
+        Ok(difference.into_value())
+    }
+
+    fn primitive_multiply(&self, args: &[Value], span: SourceSpan) -> VmResult<Value> {
+        let mut product = RuntimeNumber::Integer(1);
+        for (index, arg) in args.iter().enumerate() {
+            product = product.multiply(self.expect_number(arg, index, "*", span)?, span, self)?;
+        }
+        Ok(product.into_value())
+    }
+
+    fn primitive_numeric_equals(&self, args: &[Value], span: SourceSpan) -> VmResult<Value> {
+        let numbers = args
+            .iter()
+            .enumerate()
+            .map(|(index, arg)| self.expect_number(arg, index, "=", span))
+            .collect::<VmResult<Vec<_>>>()?;
+        let Some((first, rest)) = numbers.split_first() else {
+            return Ok(Value::Bool(true));
+        };
+
+        Ok(Value::Bool(
+            rest.iter().all(|number| first.numeric_eq(*number)),
+        ))
+    }
+
+    fn expect_number(
+        &self,
+        value: &Value,
+        index: usize,
+        primitive: &str,
+        span: SourceSpan,
+    ) -> VmResult<RuntimeNumber> {
+        RuntimeNumber::try_from_value(value).ok_or_else(|| {
+            self.runtime_error(
+                "ANVIL_RUNTIME_TYPE_ERROR",
+                format!("{primitive} expects numeric operands"),
+                span,
+                vec!["integer or Float64 operand".to_string()],
+                Some(format!(
+                    "argument {} was {}",
+                    index + 1,
+                    value_type_name(value)
+                )),
+                Some("Convert the value explicitly before using numeric primitives.".to_string()),
+            )
+        })
+    }
+
     fn jump_to(&mut self, target: usize, span: SourceSpan) -> VmResult<()> {
         if target >= self.program.instructions.len() {
             return Err(self.runtime_error(
@@ -648,6 +928,23 @@ impl<'program> Interpreter<'program> {
                 Some("Report this as a compiler or VM bug.".to_string()),
             )
         })
+    }
+
+    fn binding_name(&self, binding: usize, span: SourceSpan) -> VmResult<&str> {
+        self.program
+            .bindings
+            .get(binding)
+            .map(String::as_str)
+            .ok_or_else(|| {
+                self.runtime_error(
+                    "ANVIL_RUNTIME_BINDING_OUT_OF_BOUNDS",
+                    "bytecode binding index is outside the binding table".to_string(),
+                    span,
+                    vec!["valid binding index".to_string()],
+                    Some(format!("binding {binding}")),
+                    Some("Report this as a compiler or VM bug.".to_string()),
+                )
+            })
     }
 
     fn register(&self, register: usize, span: SourceSpan) -> VmResult<&Value> {
@@ -700,6 +997,124 @@ impl<'program> Interpreter<'program> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RuntimeNumber {
+    Integer(i64),
+    Float64(f64),
+}
+
+impl RuntimeNumber {
+    fn try_from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::Integer(value) => Some(Self::Integer(*value)),
+            Value::Float64(value) => Some(Self::Float64(*value)),
+            _ => None,
+        }
+    }
+
+    fn into_value(self) -> Value {
+        match self {
+            Self::Integer(value) => Value::Integer(value),
+            Self::Float64(value) => Value::Float64(value),
+        }
+    }
+
+    fn add(self, rhs: Self, span: SourceSpan, interpreter: &Interpreter<'_>) -> VmResult<Self> {
+        self.integer_op(rhs, span, interpreter, |lhs, rhs| lhs.checked_add(rhs))
+            .map(|value| value.unwrap_or_else(|| Self::Float64(self.as_f64() + rhs.as_f64())))
+    }
+
+    fn subtract(
+        self,
+        rhs: Self,
+        span: SourceSpan,
+        interpreter: &Interpreter<'_>,
+    ) -> VmResult<Self> {
+        self.integer_op(rhs, span, interpreter, |lhs, rhs| lhs.checked_sub(rhs))
+            .map(|value| value.unwrap_or_else(|| Self::Float64(self.as_f64() - rhs.as_f64())))
+    }
+
+    fn multiply(
+        self,
+        rhs: Self,
+        span: SourceSpan,
+        interpreter: &Interpreter<'_>,
+    ) -> VmResult<Self> {
+        self.integer_op(rhs, span, interpreter, |lhs, rhs| lhs.checked_mul(rhs))
+            .map(|value| value.unwrap_or_else(|| Self::Float64(self.as_f64() * rhs.as_f64())))
+    }
+
+    fn negate(self, span: SourceSpan, interpreter: &Interpreter<'_>) -> VmResult<Self> {
+        match self {
+            Self::Integer(value) => value
+                .checked_neg()
+                .map(Self::Integer)
+                .ok_or_else(|| numeric_overflow(interpreter, "integer negation overflowed", span)),
+            Self::Float64(value) => Ok(Self::Float64(-value)),
+        }
+    }
+
+    fn numeric_eq(self, rhs: Self) -> bool {
+        match (self, rhs) {
+            (Self::Integer(lhs), Self::Integer(rhs)) => lhs == rhs,
+            _ => self.as_f64() == rhs.as_f64(),
+        }
+    }
+
+    fn integer_op(
+        self,
+        rhs: Self,
+        span: SourceSpan,
+        interpreter: &Interpreter<'_>,
+        operation: impl FnOnce(i64, i64) -> Option<i64>,
+    ) -> VmResult<Option<Self>> {
+        match (self, rhs) {
+            (Self::Integer(lhs), Self::Integer(rhs)) => operation(lhs, rhs)
+                .map(Self::Integer)
+                .map(Some)
+                .ok_or_else(|| {
+                    numeric_overflow(interpreter, "integer arithmetic overflowed", span)
+                }),
+            _ => Ok(None),
+        }
+    }
+
+    fn as_f64(self) -> f64 {
+        match self {
+            Self::Integer(value) => value as f64,
+            Self::Float64(value) => value,
+        }
+    }
+}
+
+fn numeric_overflow(
+    interpreter: &Interpreter<'_>,
+    message: &'static str,
+    span: SourceSpan,
+) -> Box<VmDiagnostic> {
+    interpreter.runtime_error(
+        "ANVIL_RUNTIME_NUMERIC_OVERFLOW",
+        message.to_string(),
+        span,
+        vec!["exact integer arithmetic without overflow".to_string()],
+        Some("overflow".to_string()),
+        Some("Use an explicit wider numeric representation when BigInt support lands.".to_string()),
+    )
+}
+
+fn value_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Nil => "nil",
+        Value::Bool(_) => "bool",
+        Value::Integer(_) => "integer",
+        Value::Float64(_) => "float64",
+        Value::String(_) => "string",
+        Value::Keyword(_) => "keyword",
+        Value::Vector(_) => "vector",
+        Value::Map(_) => "map",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -709,12 +1124,28 @@ mod tests {
     }
 
     fn bytecode(instructions: Vec<Instruction>, constants: Vec<Value>) -> BytecodeProgram {
-        bytecode_with_registers(instructions, constants, 1)
+        bytecode_with_registers_and_bindings(instructions, constants, Vec::new(), 1)
     }
 
     fn bytecode_with_registers(
         instructions: Vec<Instruction>,
         constants: Vec<Value>,
+        register_count: usize,
+    ) -> BytecodeProgram {
+        bytecode_with_registers_and_bindings(instructions, constants, Vec::new(), register_count)
+    }
+
+    fn bytecode_with_bindings(
+        instructions: Vec<Instruction>,
+        bindings: Vec<String>,
+    ) -> BytecodeProgram {
+        bytecode_with_registers_and_bindings(instructions, Vec::new(), bindings, 1)
+    }
+
+    fn bytecode_with_registers_and_bindings(
+        instructions: Vec<Instruction>,
+        constants: Vec<Value>,
+        bindings: Vec<String>,
         register_count: usize,
     ) -> BytecodeProgram {
         let source = SourceText::new("malformed-bytecode", "broken");
@@ -723,6 +1154,7 @@ mod tests {
             source_id: source.id().to_string(),
             register_count,
             constants,
+            bindings,
             instructions: instructions
                 .into_iter()
                 .map(|instruction| BytecodeInstruction {
@@ -789,6 +1221,25 @@ mod tests {
     }
 
     #[test]
+    fn runs_definitions_symbol_lookup_and_bootstrap_primitives() {
+        assert_eq!(
+            run_value(
+                r#"
+                (define answer (+ 40 2))
+                answer
+                "#,
+            ),
+            Value::Integer(42)
+        );
+        assert_eq!(run_value("(do (define x 7) (* x 6))"), Value::Integer(42));
+        assert_eq!(run_value("(+ 1 2.5)"), Value::Float64(3.5));
+        assert_eq!(run_value("(- 10 3 2)"), Value::Integer(5));
+        assert_eq!(run_value("(- 3)"), Value::Integer(-3));
+        assert_eq!(run_value("(= 1 1.0)"), Value::Bool(true));
+        assert_eq!(run_value("(= 0 0.0 -0.0)"), Value::Bool(true));
+    }
+
+    #[test]
     fn displays_all_value_forms_with_escaping() {
         let value = Value::Vector(vec![
             Value::Nil,
@@ -822,7 +1273,7 @@ mod tests {
 
     #[test]
     fn reports_unsupported_forms_as_compile_diagnostics() {
-        let diagnostic = compile_source("(define answer 42)").expect_err("compile diagnostic");
+        let diagnostic = compile_source("(fn [x] x)").expect_err("compile diagnostic");
 
         assert_eq!(diagnostic.code, "ANVIL_COMPILE_UNSUPPORTED_FORM");
         assert_eq!(diagnostic.phase, DiagnosticPhase::Compile);
@@ -830,12 +1281,44 @@ mod tests {
     }
 
     #[test]
-    fn reports_unbound_symbols_as_compile_diagnostics() {
-        let diagnostic = compile_source("answer").expect_err("compile diagnostic");
+    fn reports_unbound_symbols_as_runtime_diagnostics() {
+        let diagnostic = run_source("answer").expect_err("runtime diagnostic");
 
-        assert_eq!(diagnostic.code, "ANVIL_COMPILE_UNBOUND_SYMBOL");
-        assert_eq!(diagnostic.phase, DiagnosticPhase::Compile);
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_UNBOUND_SYMBOL");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Runtime);
         assert_eq!(diagnostic.actual.as_deref(), Some("symbol answer"));
+    }
+
+    #[test]
+    fn reports_unsupported_calls_as_compile_diagnostics() {
+        let diagnostic = compile_source("(unknown 1)").expect_err("compile diagnostic");
+
+        assert_eq!(diagnostic.code, "ANVIL_COMPILE_UNSUPPORTED_CALL");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Compile);
+        assert_eq!(diagnostic.primary_span.start.column, 1);
+    }
+
+    #[test]
+    fn reports_bootstrap_primitive_type_and_arity_errors() {
+        let type_diagnostic = run_source("(+ 1 \"agent\")").expect_err("runtime diagnostic");
+        assert_eq!(type_diagnostic.code, "ANVIL_RUNTIME_TYPE_ERROR");
+        assert_eq!(type_diagnostic.phase, DiagnosticPhase::Runtime);
+        assert_eq!(
+            type_diagnostic.actual.as_deref(),
+            Some("argument 2 was string")
+        );
+
+        let arity_diagnostic = run_source("(-)").expect_err("runtime diagnostic");
+        assert_eq!(arity_diagnostic.code, "ANVIL_RUNTIME_ARITY");
+        assert_eq!(arity_diagnostic.phase, DiagnosticPhase::Runtime);
+    }
+
+    #[test]
+    fn reports_exact_integer_overflow() {
+        let diagnostic = run_source("(+ 9223372036854775807 1)").expect_err("runtime diagnostic");
+
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_NUMERIC_OVERFLOW");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Runtime);
     }
 
     #[test]
@@ -953,6 +1436,32 @@ mod tests {
                 Vec::new(),
             )),
             "ANVIL_RUNTIME_REGISTER_OUT_OF_BOUNDS"
+        );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_binding_out_of_bounds() {
+        assert_eq!(
+            runtime_code(bytecode(
+                vec![Instruction::LoadBinding { dst: 0, binding: 9 }],
+                Vec::new(),
+            )),
+            "ANVIL_RUNTIME_BINDING_OUT_OF_BOUNDS"
+        );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_unknown_primitives() {
+        assert_eq!(
+            runtime_code(bytecode_with_bindings(
+                vec![Instruction::CallPrimitive {
+                    dst: 0,
+                    primitive: 0,
+                    args: Vec::new(),
+                }],
+                vec!["future".to_string()],
+            )),
+            "ANVIL_RUNTIME_UNKNOWN_PRIMITIVE"
         );
     }
 }

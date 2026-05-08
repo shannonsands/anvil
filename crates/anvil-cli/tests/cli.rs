@@ -107,12 +107,12 @@ fn run_command_evaluates_in_bootstrap_vm() {
 
 #[test]
 fn run_command_reports_compile_diagnostics_as_json() {
-    let output = run_anvil(&["run", "--json", "(define answer 42)"], "");
+    let output = run_anvil(&["run", "--json", "(unknown 42)"], "");
 
     assert!(output.status.success());
     let stdout = stdout_text(&output);
     assert!(stdout.contains(r#""status":"error""#));
-    assert!(stdout.contains("ANVIL_COMPILE_UNSUPPORTED_FORM"));
+    assert!(stdout.contains("ANVIL_COMPILE_UNSUPPORTED_CALL"));
     assert!(stdout.contains(r#""phase":"compile""#));
 }
 
