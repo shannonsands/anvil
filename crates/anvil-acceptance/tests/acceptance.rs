@@ -2,9 +2,10 @@ use std::path::Path;
 
 use anvil_core::{
     AnvilManifest, AstDiagnostic, DraftOverlay, ManifestDiagnostic, ModuleDiagnostic,
-    ModuleResolution, ModuleResolver, ModuleRootKind, ReplInteraction, ReplResponse, ReplSession,
-    SpannedAst, SyntaxDiagnostic, SyntaxObject, format_ast, format_datums, lower_source,
-    lower_source_with_resolver, parse_manifest, read_repl_input, syntax_from_source,
+    ModuleResolution, ModuleResolver, ModuleRootKind, PackageSnapshot, PackageSourceFile,
+    ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic, SyntaxObject,
+    format_ast, format_datums, lower_source, lower_source_with_resolver, parse_manifest,
+    read_repl_input, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -28,6 +29,7 @@ struct AnvilWorld {
     manifest_source: String,
     manifest: Option<AnvilManifest>,
     manifest_diagnostic: Option<Box<ManifestDiagnostic>>,
+    package_sources: Vec<PackageSourceFile>,
 }
 
 #[given("a fresh Anvil planning scaffold")]
@@ -89,6 +91,14 @@ async fn manifest_input(world: &mut AnvilWorld, #[step] step: &Step) {
     world.manifest_source = trim_docstring(step.docstring().expect("manifest input")).to_string();
     world.manifest = None;
     world.manifest_diagnostic = None;
+    world.package_sources.clear();
+}
+
+#[given(expr = "package source {string} contains {string}")]
+async fn package_source_contains(world: &mut AnvilWorld, path: String, source: String) {
+    world
+        .package_sources
+        .push(PackageSourceFile { path, source });
 }
 
 #[when("the reader-backed REPL reads the input")]
@@ -191,6 +201,23 @@ async fn manifest_is_parsed(world: &mut AnvilWorld) {
             world.manifest_diagnostic = Some(diagnostic);
         }
     }
+}
+
+#[when("the package snapshot builds a module resolver")]
+async fn package_snapshot_builds_module_resolver(world: &mut AnvilWorld) {
+    let manifest = world.manifest.clone().unwrap_or_else(|| {
+        let manifest = parse_manifest(&world.manifest_source).expect("manifest parses");
+        world.manifest = Some(manifest.clone());
+        manifest
+    });
+    let mut snapshot = PackageSnapshot::new(manifest);
+    for source in &world.package_sources {
+        snapshot.add_source(source.path.clone(), source.source.clone());
+    }
+
+    world.module_resolver = snapshot.module_resolver();
+    world.module_resolution = None;
+    world.module_diagnostic = None;
 }
 
 #[when(expr = "the module resolver resolves {string}")]

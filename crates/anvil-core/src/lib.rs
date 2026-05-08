@@ -3,6 +3,7 @@ pub mod diagnostic;
 pub mod draft;
 pub mod manifest;
 pub mod module;
+pub mod project;
 pub mod reader;
 pub mod repl;
 pub mod source;
@@ -26,6 +27,7 @@ pub use module::{
     ModuleCandidate, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
     ModuleSource,
 };
+pub use project::{PackageSnapshot, PackageSourceFile, package_module_sources};
 pub use reader::{
     Datum, ReaderDiagnostic, SpannedDatum, format_datums, read_source, read_source_text,
 };

@@ -64,6 +64,9 @@ matter to code structure.
 - Initial `Anvil.toml` parsing reads package identity, library root,
   source/test/eval/example roots, and workspace members, with manifest-phase
   diagnostics for malformed TOML and missing required tables.
+- Initial package snapshots derive package module sources from a parsed
+  manifest plus known in-memory package files, registering the library root and
+  `.anv` files under declared source roots without filesystem walking yet.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 

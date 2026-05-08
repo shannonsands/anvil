@@ -50,6 +50,9 @@ The first executable acceptance harness is intentionally tiny but real:
 - `manifest.feature` covers the first `Anvil.toml` parser: package identity,
   library root, default and explicit source/test/eval/example roots, workspace
   members, missing-table diagnostics, and malformed TOML diagnostics.
+- `package_snapshot.feature` covers the first manifest-backed package snapshot:
+  library module registration, source-root module derivation, and ignoring
+  package files outside declared source roots.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as

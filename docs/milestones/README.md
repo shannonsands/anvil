@@ -49,6 +49,8 @@ Current slice:
 - Minimal `Anvil.toml` parsing exists for package identity, library root,
   source/test/eval/example roots, and workspace members, with manifest-phase
   diagnostics for malformed TOML and missing required tables.
+- Package snapshots can build a package-root module resolver from a parsed
+  manifest plus known in-memory `.anv` files under declared source roots.
 
 ## M3: Bytecode VM Foundation
 
