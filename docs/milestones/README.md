@@ -86,3 +86,13 @@ Exit criteria:
 - Rust hosts can register functions, modules, and resource handles.
 - Capability checks are precise and inspectable.
 - A module can run under multiple profiles with different authority.
+
+Current design slice:
+
+- Resource handles are locked as supervisor-issued, typed, revocable
+  capabilities over host/runtime resources.
+- Handle use is checked at every operation boundary through a
+  process/session-scoped handle table.
+- Delegation creates a narrowed handle and never widens authority.
+- Live handles are not persisted into packages, bytecode caches, eval artifacts,
+  model artifacts, or logs.

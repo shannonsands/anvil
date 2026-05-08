@@ -16,6 +16,10 @@ Implementation-facing decision:
 - The facade should expose eval, call, draft compile/test/activation request,
   inspect, attach/debug, subscribe/stream, resource calls, actor messages,
   facet lookup, capability/profile inspection, and cancellation.
+- Resource registration and facade-visible handles follow
+  `docs/decisions/resource-handles.md`: handles are typed, opaque,
+  supervisor-issued, use-site checked, narrowed on delegation, and never raw
+  Rust object access.
 - The facade should not expose GC objects, scheduler internals, raw frames, raw
   Rust pointers, or unmediated host resources.
 - Ordinary language failures, denials, approvals, timeouts, and budget

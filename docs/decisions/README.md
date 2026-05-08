@@ -86,6 +86,10 @@ matter to code structure.
   safe-point based, with opaque value references, immutable default values,
   explicit mutable abstractions, and supervisor-owned resource handles outside
   the ordinary heap.
+- Resource handles are supervisor-issued, typed, revocable capabilities over
+  host/runtime resources. They are used through per-process/session handle
+  tables, checked at every operation boundary, delegated only through explicit
+  narrowing, and serialized only as scoped opaque tokens.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 
@@ -97,8 +101,8 @@ matter to code structure.
 - Concrete persistent collection layouts, root-table implementation details,
   GC tuning, and later generational/incremental/compacting collector strategy
   beyond the initial tracing-GC contract.
-- Resource-handle contract for Rust, MarkoDB, tensor, file, network, process,
-  runtime table, actor, debug, and secret resources.
+- Concrete Rust type layout for resource registries, handle tables, adapters,
+  resource operation schemas, and denial/audit event structs.
 - Concrete runtime syntax for `defactor`, supervisors, atoms, channels,
   task groups, PubSub, hooks, watchers, event streams, and reactive forms.
 - Debugger and attach semantics: breakpoints, frame inspection, debug eval,

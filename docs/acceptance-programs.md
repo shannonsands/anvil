@@ -17,6 +17,8 @@ Initial candidates:
 - Actor with mailbox, supervised restart, and REPL inspection.
 - Capability denial example for file, network, debug attach, and resource
   handle use.
+- Resource-handle example covering open, inspect, denial-before-adapter-call,
+  narrowed delegation, explicit close, revoke, and redacted display.
 - Value/heap stress example with cyclic language graphs, actor roots, process
   cancellation, resource handle revocation, and debug inspection without raw
   address exposure.

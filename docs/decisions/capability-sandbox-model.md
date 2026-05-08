@@ -23,5 +23,6 @@ Implementation-facing decision:
   capability-aware, and audited.
 
 Open implementation dependency: the value/heap/GC direction is drafted in
-`docs/decisions/value-heap-gc.md`; finish the resource-handle contract before
-encoding the low-level sandbox model in Rust types.
+`docs/decisions/value-heap-gc.md`, and the resource-handle contract is drafted
+in `docs/decisions/resource-handles.md`. The next dependency is concrete Rust
+type encoding for the low-level sandbox model.

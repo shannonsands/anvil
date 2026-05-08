@@ -37,6 +37,9 @@ Preserve these unless the planning docs are updated first:
 - Ordinary language heap values use tracing GC; host resources, tensors,
   devices, files, secrets, actors, runtime tables, and debug ports stay behind
   supervisor-owned opaque handles.
+- Resource handles are typed, supervisor-issued capabilities checked at every
+  operation boundary; copying, serializing, or sending a handle must not widen
+  authority without explicit narrowed delegation.
 - WASM is a sandbox and portability target, not the whole security model.
 - MightyGrad remains a separate tensor/backend project that Anvil can target
   later through a backend adapter.

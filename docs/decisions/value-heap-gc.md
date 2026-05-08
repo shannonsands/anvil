@@ -95,7 +95,7 @@ execution unit's memory.
 
 Host resources are outside the ordinary language heap. The heap may hold opaque
 handle values, but the supervisor/resource registry owns the real resource and
-its authority.
+its authority. The detailed contract is `docs/decisions/resource-handles.md`.
 
 - Handles are unforgeable, typed, capability-checked, and revocable.
 - Explicit close/revoke is the semantic release path.
