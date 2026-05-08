@@ -40,8 +40,22 @@ Feature: Bytecode VM foundation
     When the bytecode VM runs the input
     Then the VM value prints as "42"
 
+  Scenario: Run named function values
+    Given the agent input
+      """
+      (define add (fn [x y] (+ x y)))
+      (add 40 2)
+      """
+    When the bytecode VM runs the input
+    Then the VM value prints as "42"
+
+  Scenario: Run direct function literal calls
+    Given the agent input "((fn [x] (* x x)) 6)"
+    When the bytecode VM runs the input
+    Then the VM value prints as "36"
+
   Scenario: Report unsupported forms during compilation
-    Given the agent input "(fn [x] x)"
+    Given the agent input "(require planner.search)"
     When the bytecode VM runs the input
     Then the VM diagnostic code is "ANVIL_COMPILE_UNSUPPORTED_FORM"
     And the VM diagnostic phase is "compile"
@@ -54,11 +68,11 @@ Feature: Bytecode VM foundation
     And the VM diagnostic phase is "runtime"
     And the VM diagnostic primary span starts at line 1 column 1
 
-  Scenario: Report unsupported calls during compilation
-    Given the agent input "(unknown 1)"
+  Scenario: Report non-callable values during runtime
+    Given the agent input "(42)"
     When the bytecode VM runs the input
-    Then the VM diagnostic code is "ANVIL_COMPILE_UNSUPPORTED_CALL"
-    And the VM diagnostic phase is "compile"
+    Then the VM diagnostic code is "ANVIL_RUNTIME_NOT_CALLABLE"
+    And the VM diagnostic phase is "runtime"
     And the VM diagnostic primary span starts at line 1 column 1
 
   Scenario: Report runtime fuel exhaustion

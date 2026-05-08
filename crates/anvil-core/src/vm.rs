@@ -22,6 +22,7 @@ pub struct BytecodeProgram {
     pub register_count: usize,
     pub constants: Vec<Value>,
     pub bindings: Vec<String>,
+    pub functions: Vec<FunctionPrototype>,
     pub instructions: Vec<BytecodeInstruction>,
     #[serde(skip)]
     source: SourceText,
@@ -38,6 +39,13 @@ pub struct BytecodeInstruction {
     #[serde(flatten)]
     pub instruction: Instruction,
     pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FunctionPrototype {
+    pub params: Vec<String>,
+    pub register_count: usize,
+    pub instructions: Vec<BytecodeInstruction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -63,9 +71,18 @@ pub enum Instruction {
         binding: usize,
         src: usize,
     },
+    LoadFunction {
+        dst: usize,
+        function: usize,
+    },
     CallPrimitive {
         dst: usize,
         primitive: usize,
+        args: Vec<usize>,
+    },
+    CallFunction {
+        dst: usize,
+        callee: usize,
         args: Vec<usize>,
     },
     JumpIfFalse {
@@ -97,6 +114,7 @@ pub enum Value {
     Keyword(String),
     Vector(Vec<Value>),
     Map(Vec<ValueMapEntry>),
+    Function(FunctionValue),
 }
 
 impl Value {
@@ -116,6 +134,7 @@ impl fmt::Display for Value {
             Self::Keyword(value) => write!(f, ":{value}"),
             Self::Vector(items) => write_sequence(f, "[", "]", items),
             Self::Map(entries) => write_map(f, entries),
+            Self::Function(value) => write!(f, "#<fn:{}>", value.function),
         }
     }
 }
@@ -124,6 +143,11 @@ impl fmt::Display for Value {
 pub struct ValueMapEntry {
     pub key: Value,
     pub value: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FunctionValue {
+    pub function: usize,
 }
 
 fn write_sequence(
@@ -245,7 +269,7 @@ pub fn compile_ast(source: &SourceText, expressions: &[SpannedAst]) -> VmResult<
         Instruction::Return {
             src: RESULT_REGISTER,
         },
-        compiler.last_span,
+        compiler.unit.last_span,
     );
 
     Ok(compiler.finish())
@@ -263,42 +287,64 @@ pub fn run_source_text(source: &SourceText) -> VmResult<VmOutput> {
 
 struct Compiler<'source> {
     source: &'source SourceText,
-    program: BytecodeProgram,
+    constants: Vec<Value>,
+    bindings: Vec<String>,
+    functions: Vec<FunctionPrototype>,
+    unit: CompileUnit,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct CompileUnit {
+    register_count: usize,
+    instructions: Vec<BytecodeInstruction>,
     next_register: usize,
     last_span: SourceSpan,
+}
+
+impl CompileUnit {
+    fn new() -> Self {
+        Self {
+            register_count: 1,
+            instructions: Vec::new(),
+            next_register: 1,
+            last_span: SourceSpan::point(SourceLocation::start()),
+        }
+    }
 }
 
 impl<'source> Compiler<'source> {
     fn new(source: &'source SourceText) -> Self {
         Self {
             source,
-            program: BytecodeProgram {
-                version: BYTECODE_VERSION,
-                source_id: source.id().to_string(),
-                register_count: 1,
-                constants: Vec::new(),
-                bindings: Vec::new(),
-                instructions: Vec::new(),
-                source: source.clone(),
-            },
-            next_register: 1,
-            last_span: SourceSpan::point(SourceLocation::start()),
+            constants: Vec::new(),
+            bindings: Vec::new(),
+            functions: Vec::new(),
+            unit: CompileUnit::new(),
         }
     }
 
     fn finish(self) -> BytecodeProgram {
-        self.program
+        BytecodeProgram {
+            version: BYTECODE_VERSION,
+            source_id: self.source.id().to_string(),
+            register_count: self.unit.register_count,
+            constants: self.constants,
+            bindings: self.bindings,
+            functions: self.functions,
+            instructions: self.unit.instructions,
+            source: self.source.clone(),
+        }
     }
 
     fn compile_expressions(&mut self, expressions: &[SpannedAst], dst: usize) -> VmResult<()> {
         if expressions.is_empty() {
-            self.load_constant(dst, Value::Nil, self.last_span);
+            self.load_constant(dst, Value::Nil, self.unit.last_span);
             return Ok(());
         }
 
         for expression in expressions {
             self.compile_expression(expression, dst)?;
-            self.last_span = expression.span;
+            self.unit.last_span = expression.span;
         }
         Ok(())
     }
@@ -315,6 +361,7 @@ impl<'source> Compiler<'source> {
             AstKind::Define { name, value } => {
                 self.compile_define(name, value, dst, expression.span)
             }
+            AstKind::Fn { params, body } => self.compile_fn(params, body, dst, expression.span),
             AstKind::If {
                 condition,
                 then_branch,
@@ -337,8 +384,9 @@ impl<'source> Compiler<'source> {
                     "do".to_string(),
                     "if".to_string(),
                     "define".to_string(),
+                    "fn".to_string(),
                     "symbol".to_string(),
-                    "bootstrap primitive call".to_string(),
+                    "call".to_string(),
                 ],
                 actual: Some(ast_kind_name(&expression.kind).to_string()),
                 suggestion: Some(
@@ -362,6 +410,42 @@ impl<'source> Compiler<'source> {
         Ok(())
     }
 
+    fn compile_fn(
+        &mut self,
+        params: &[String],
+        body: &[SpannedAst],
+        dst: usize,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        let parent_unit = std::mem::replace(&mut self.unit, CompileUnit::new());
+        let prototype = self.compile_function_prototype(params, body);
+        self.unit = parent_unit;
+
+        let function = self.push_function(prototype?);
+        self.emit(Instruction::LoadFunction { dst, function }, span);
+        Ok(())
+    }
+
+    fn compile_function_prototype(
+        &mut self,
+        params: &[String],
+        body: &[SpannedAst],
+    ) -> VmResult<FunctionPrototype> {
+        self.compile_expressions(body, RESULT_REGISTER)?;
+        self.emit(
+            Instruction::Return {
+                src: RESULT_REGISTER,
+            },
+            self.unit.last_span,
+        );
+
+        Ok(FunctionPrototype {
+            params: params.to_vec(),
+            register_count: self.unit.register_count,
+            instructions: self.unit.instructions.clone(),
+        })
+    }
+
     fn compile_call(
         &mut self,
         callee: &SpannedAst,
@@ -369,13 +453,38 @@ impl<'source> Compiler<'source> {
         dst: usize,
         span: SourceSpan,
     ) -> VmResult<()> {
-        let AstKind::Symbol { name } = &callee.kind else {
-            return Err(self.unsupported_call_error(callee, span));
-        };
-        if !is_bootstrap_primitive(name) {
-            return Err(self.unsupported_call_error(callee, span));
+        if let AstKind::Symbol { name } = &callee.kind
+            && is_bootstrap_primitive(name)
+        {
+            return self.compile_primitive_call(name, args, dst, span);
         }
 
+        let callee_register = self.allocate_register();
+        self.compile_expression(callee, callee_register)?;
+        let mut arg_registers = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg_register = self.allocate_register();
+            self.compile_expression(arg, arg_register)?;
+            arg_registers.push(arg_register);
+        }
+        self.emit(
+            Instruction::CallFunction {
+                dst,
+                callee: callee_register,
+                args: arg_registers,
+            },
+            span,
+        );
+        Ok(())
+    }
+
+    fn compile_primitive_call(
+        &mut self,
+        name: &str,
+        args: &[SpannedAst],
+        dst: usize,
+        span: SourceSpan,
+    ) -> VmResult<()> {
         let mut arg_registers = Vec::with_capacity(args.len());
         for arg in args {
             let arg_register = self.allocate_register();
@@ -475,53 +584,54 @@ impl<'source> Compiler<'source> {
         self.compile_expression(then_branch, dst)?;
         let end_jump = self.emit(Instruction::Jump { target: usize::MAX }, then_branch.span);
 
-        let else_start = self.program.instructions.len();
+        let else_start = self.unit.instructions.len();
         self.patch_jump_target(false_jump, else_start);
         self.compile_expression(else_branch, dst)?;
 
-        let end = self.program.instructions.len();
+        let end = self.unit.instructions.len();
         self.patch_jump_target(end_jump, end);
         Ok(())
     }
 
     fn load_constant(&mut self, dst: usize, value: Value, span: SourceSpan) {
-        let constant = self.program.constants.len();
-        self.program.constants.push(value);
+        let constant = self.constants.len();
+        self.constants.push(value);
         self.emit(Instruction::LoadConstant { dst, constant }, span);
     }
 
     fn intern_binding(&mut self, name: &str) -> usize {
-        if let Some(index) = self
-            .program
-            .bindings
-            .iter()
-            .position(|binding| binding == name)
-        {
+        if let Some(index) = self.bindings.iter().position(|binding| binding == name) {
             return index;
         }
 
-        let index = self.program.bindings.len();
-        self.program.bindings.push(name.to_string());
+        let index = self.bindings.len();
+        self.bindings.push(name.to_string());
+        index
+    }
+
+    fn push_function(&mut self, function: FunctionPrototype) -> usize {
+        let index = self.functions.len();
+        self.functions.push(function);
         index
     }
 
     fn allocate_register(&mut self) -> usize {
-        let register = self.next_register;
-        self.next_register += 1;
-        self.program.register_count = self.program.register_count.max(self.next_register);
+        let register = self.unit.next_register;
+        self.unit.next_register += 1;
+        self.unit.register_count = self.unit.register_count.max(self.unit.next_register);
         register
     }
 
     fn emit(&mut self, instruction: Instruction, span: SourceSpan) -> usize {
-        let index = self.program.instructions.len();
-        self.program
+        let index = self.unit.instructions.len();
+        self.unit
             .instructions
             .push(BytecodeInstruction { instruction, span });
         index
     }
 
     fn patch_jump_target(&mut self, instruction_index: usize, target: usize) {
-        match &mut self.program.instructions[instruction_index].instruction {
+        match &mut self.unit.instructions[instruction_index].instruction {
             Instruction::JumpIfFalse {
                 target: jump_target,
                 ..
@@ -531,22 +641,6 @@ impl<'source> Compiler<'source> {
             } => *jump_target = target,
             _ => unreachable!("only jump instructions are patched"),
         }
-    }
-
-    fn unsupported_call_error(&self, callee: &SpannedAst, span: SourceSpan) -> Box<VmDiagnostic> {
-        Diagnostic::new(DiagnosticSpec {
-            code: "ANVIL_COMPILE_UNSUPPORTED_CALL",
-            phase: DiagnosticPhase::Compile,
-            source: self.source,
-            message: "call is not executable in the bootstrap VM".to_string(),
-            span,
-            expected: vec!["bootstrap primitive callee: +, -, *, or =".to_string()],
-            actual: Some(format!("{} callee", ast_kind_name(&callee.kind))),
-            suggestion: Some(
-                "Use a bootstrap numeric primitive, or wait for closures and function calls."
-                    .to_string(),
-            ),
-        })
     }
 
     fn compile_error(&self, spec: CompileDiagnosticSpec) -> Box<VmDiagnostic> {
@@ -603,12 +697,53 @@ fn ast_kind_name(kind: &AstKind) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameCode {
+    TopLevel,
+    Function(usize),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ExecutionFrame {
+    code: FrameCode,
+    registers: Vec<Value>,
+    locals: BTreeMap<String, Value>,
+    pc: usize,
+    return_register: Option<usize>,
+}
+
+impl ExecutionFrame {
+    fn top_level(register_count: usize) -> Self {
+        Self {
+            code: FrameCode::TopLevel,
+            registers: vec![Value::Nil; register_count],
+            locals: BTreeMap::new(),
+            pc: 0,
+            return_register: None,
+        }
+    }
+
+    fn function(
+        function: usize,
+        register_count: usize,
+        locals: BTreeMap<String, Value>,
+        return_register: usize,
+    ) -> Self {
+        Self {
+            code: FrameCode::Function(function),
+            registers: vec![Value::Nil; register_count],
+            locals,
+            pc: 0,
+            return_register: Some(return_register),
+        }
+    }
+}
+
 struct Interpreter<'program> {
     program: &'program BytecodeProgram,
     budget: VmBudget,
-    registers: Vec<Value>,
+    frames: Vec<ExecutionFrame>,
     bindings: BTreeMap<String, Value>,
-    pc: usize,
     instructions_executed: usize,
 }
 
@@ -617,9 +752,8 @@ impl<'program> Interpreter<'program> {
         Self {
             program,
             budget,
-            registers: vec![Value::Nil; program.register_count],
+            frames: vec![ExecutionFrame::top_level(program.register_count)],
             bindings: BTreeMap::new(),
-            pc: 0,
             instructions_executed: 0,
         }
     }
@@ -650,7 +784,7 @@ impl<'program> Interpreter<'program> {
                 self.jump_to(target, span)?;
                 Ok(None)
             }
-            Instruction::Return { src } => self.return_output(src, span).map(Some),
+            Instruction::Return { src } => self.return_from_frame(src, span),
             instruction => {
                 self.execute_value_instruction(instruction, span)?;
                 Ok(None)
@@ -667,33 +801,31 @@ impl<'program> Interpreter<'program> {
             Instruction::LoadConstant { dst, constant } => {
                 let value = self.constant(constant, span)?.clone();
                 self.set_register(dst, value, span)?;
-                self.pc += 1;
-                Ok(())
+                self.advance_pc()
             }
             Instruction::MakeVector { dst, items } => {
                 let value = self.build_vector(&items, span)?;
                 self.set_register(dst, value, span)?;
-                self.pc += 1;
-                Ok(())
+                self.advance_pc()
             }
             Instruction::MakeMap { dst, entries } => {
                 let value = self.build_map(&entries, span)?;
                 self.set_register(dst, value, span)?;
-                self.pc += 1;
-                Ok(())
+                self.advance_pc()
             }
             Instruction::LoadBinding { dst, binding } => {
                 let value = self.load_binding(binding, span)?;
                 self.set_register(dst, value, span)?;
-                self.pc += 1;
-                Ok(())
+                self.advance_pc()
             }
             Instruction::DefineBinding { binding, src } => {
-                let name = self.binding_name(binding, span)?.to_string();
-                let value = self.register(src, span)?.clone();
-                self.bindings.insert(name, value);
-                self.pc += 1;
-                Ok(())
+                self.define_binding(binding, src, span)?;
+                self.advance_pc()
+            }
+            Instruction::LoadFunction { dst, function } => {
+                self.function(function, span)?;
+                self.set_register(dst, Value::Function(FunctionValue { function }), span)?;
+                self.advance_pc()
             }
             Instruction::CallPrimitive {
                 dst,
@@ -703,8 +835,10 @@ impl<'program> Interpreter<'program> {
                 let primitive_name = self.binding_name(primitive, span)?.to_string();
                 let value = self.call_primitive(&primitive_name, &args, span)?;
                 self.set_register(dst, value, span)?;
-                self.pc += 1;
-                Ok(())
+                self.advance_pc()
+            }
+            Instruction::CallFunction { dst, callee, args } => {
+                self.call_function(dst, callee, &args, span)
             }
             _ => unreachable!("control instructions are handled by execute_instruction"),
         }
@@ -717,33 +851,40 @@ impl<'program> Interpreter<'program> {
         span: SourceSpan,
     ) -> VmResult<()> {
         if self.register(condition, span)?.is_truthy() {
-            self.pc += 1;
-            return Ok(());
+            return self.advance_pc();
         }
 
         self.jump_to(target, span)
     }
 
-    fn return_output(&self, src: usize, span: SourceSpan) -> VmResult<VmOutput> {
+    fn return_from_frame(&mut self, src: usize, span: SourceSpan) -> VmResult<Option<VmOutput>> {
         let value = self.register(src, span)?.clone();
-        Ok(VmOutput {
-            value,
-            instructions_executed: self.instructions_executed,
-        })
+        let return_register = self.current_frame()?.return_register;
+        let Some(dst) = return_register else {
+            return Ok(Some(VmOutput {
+                value,
+                instructions_executed: self.instructions_executed,
+            }));
+        };
+
+        self.frames.pop();
+        self.set_register(dst, value, span)?;
+        Ok(None)
     }
 
     fn current_instruction(&self) -> VmResult<&BytecodeInstruction> {
-        self.program.instructions.get(self.pc).ok_or_else(|| {
+        let (code, pc) = {
+            let frame = self.current_frame()?;
+            (frame.code, frame.pc)
+        };
+        let instructions = self.instructions_for(code)?;
+        instructions.get(pc).ok_or_else(|| {
             self.runtime_error(
                 "ANVIL_RUNTIME_PC_OUT_OF_BOUNDS",
                 "program counter moved outside the bytecode program".to_string(),
-                self.program
-                    .instructions
-                    .last()
-                    .map(|instruction| instruction.span)
-                    .unwrap_or_else(|| SourceSpan::point(SourceLocation::start())),
+                self.last_instruction_span(code),
                 vec!["valid bytecode instruction".to_string()],
-                Some(format!("pc {}", self.pc)),
+                Some(format!("pc {pc}")),
                 Some("Report this as a compiler or VM bug.".to_string()),
             )
         })
@@ -764,6 +905,13 @@ impl<'program> Interpreter<'program> {
             ));
         }
         *remaining -= 1;
+        Ok(())
+    }
+
+    fn define_binding(&mut self, binding: usize, src: usize, span: SourceSpan) -> VmResult<()> {
+        let name = self.binding_name(binding, span)?.to_string();
+        let value = self.register(src, span)?.clone();
+        self.bindings.insert(name, value);
         Ok(())
     }
 
@@ -788,20 +936,89 @@ impl<'program> Interpreter<'program> {
 
     fn load_binding(&self, binding: usize, span: SourceSpan) -> VmResult<Value> {
         let name = self.binding_name(binding, span)?;
+        if let Some(value) = self.current_frame()?.locals.get(name) {
+            return Ok(value.clone());
+        }
+
         self.bindings.get(name).cloned().ok_or_else(|| {
             self.runtime_error(
                 "ANVIL_RUNTIME_UNBOUND_SYMBOL",
                 format!("symbol {name} is not bound"),
                 span,
-                vec!["defined top-level binding".to_string()],
+                vec!["local parameter or defined top-level binding".to_string()],
                 Some(format!("symbol {name}")),
                 Some("Define the symbol before reading it in this VM program.".to_string()),
             )
         })
     }
 
+    fn call_function(
+        &mut self,
+        dst: usize,
+        callee: usize,
+        args: &[usize],
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        let callee = self.register(callee, span)?.clone();
+        let Value::Function(function) = callee else {
+            return Err(self.not_callable(callee, span));
+        };
+
+        let arg_values = self.register_values(args, span)?;
+        let (register_count, params) = self.function_signature(function.function, span)?;
+        self.ensure_arity(params.len(), arg_values.len(), span)?;
+        let locals = params.into_iter().zip(arg_values).collect();
+
+        self.advance_pc()?;
+        self.frames.push(ExecutionFrame::function(
+            function.function,
+            register_count,
+            locals,
+            dst,
+        ));
+        Ok(())
+    }
+
+    fn function_signature(
+        &self,
+        function: usize,
+        span: SourceSpan,
+    ) -> VmResult<(usize, Vec<String>)> {
+        let prototype = self.function(function, span)?;
+        Ok((prototype.register_count, prototype.params.clone()))
+    }
+
+    fn ensure_arity(&self, expected: usize, actual: usize, span: SourceSpan) -> VmResult<()> {
+        if expected == actual {
+            return Ok(());
+        }
+
+        Err(self.runtime_error(
+            "ANVIL_RUNTIME_ARITY",
+            format!("function expects {expected} argument(s)"),
+            span,
+            vec![format!("{expected} argument(s)")],
+            Some(format!("{actual} argument(s)")),
+            Some("Call the function with the parameter count declared by fn.".to_string()),
+        ))
+    }
+
+    fn not_callable(&self, value: Value, span: SourceSpan) -> Box<VmDiagnostic> {
+        self.runtime_error(
+            "ANVIL_RUNTIME_NOT_CALLABLE",
+            "value is not callable".to_string(),
+            span,
+            vec!["function value".to_string()],
+            Some(value_type_name(&value).to_string()),
+            Some(
+                "Call a function value, or check that the callee symbol is bound to one."
+                    .to_string(),
+            ),
+        )
+    }
+
     fn call_primitive(&self, primitive: &str, args: &[usize], span: SourceSpan) -> VmResult<Value> {
-        let args = self.primitive_args(args, span)?;
+        let args = self.register_values(args, span)?;
         match primitive {
             "+" => self.primitive_add(&args, span),
             "-" => self.primitive_subtract(&args, span),
@@ -818,7 +1035,7 @@ impl<'program> Interpreter<'program> {
         }
     }
 
-    fn primitive_args(&self, args: &[usize], span: SourceSpan) -> VmResult<Vec<Value>> {
+    fn register_values(&self, args: &[usize], span: SourceSpan) -> VmResult<Vec<Value>> {
         args.iter()
             .map(|arg| self.register(*arg, span).cloned())
             .collect()
@@ -903,7 +1120,8 @@ impl<'program> Interpreter<'program> {
     }
 
     fn jump_to(&mut self, target: usize, span: SourceSpan) -> VmResult<()> {
-        if target >= self.program.instructions.len() {
+        let instruction_count = self.instructions_for(self.current_frame()?.code)?.len();
+        if target >= instruction_count {
             return Err(self.runtime_error(
                 "ANVIL_RUNTIME_BAD_JUMP_TARGET",
                 "bytecode jump target is outside the program".to_string(),
@@ -913,7 +1131,12 @@ impl<'program> Interpreter<'program> {
                 Some("Report this as a compiler or VM bug.".to_string()),
             ));
         }
-        self.pc = target;
+        self.current_frame_mut()?.pc = target;
+        Ok(())
+    }
+
+    fn advance_pc(&mut self) -> VmResult<()> {
+        self.current_frame_mut()?.pc += 1;
         Ok(())
     }
 
@@ -926,6 +1149,19 @@ impl<'program> Interpreter<'program> {
                 vec!["valid constant index".to_string()],
                 Some(format!("constant {constant}")),
                 Some("Report this as a compiler or VM bug.".to_string()),
+            )
+        })
+    }
+
+    fn function(&self, function: usize, span: SourceSpan) -> VmResult<&FunctionPrototype> {
+        self.program.functions.get(function).ok_or_else(|| {
+            self.runtime_error(
+                "ANVIL_RUNTIME_FUNCTION_OUT_OF_BOUNDS",
+                "bytecode function index is outside the function table".to_string(),
+                span,
+                vec!["valid function index".to_string()],
+                Some(format!("function {function}")),
+                Some("Report this as a compiler or bytecode construction bug.".to_string()),
             )
         })
     }
@@ -948,20 +1184,24 @@ impl<'program> Interpreter<'program> {
     }
 
     fn register(&self, register: usize, span: SourceSpan) -> VmResult<&Value> {
-        self.registers.get(register).ok_or_else(|| {
-            self.runtime_error(
-                "ANVIL_RUNTIME_REGISTER_OUT_OF_BOUNDS",
-                "bytecode register index is outside the register file".to_string(),
-                span,
-                vec!["valid register index".to_string()],
-                Some(format!("register {register}")),
-                Some("Report this as a compiler or VM bug.".to_string()),
-            )
-        })
+        self.current_frame()?
+            .registers
+            .get(register)
+            .ok_or_else(|| {
+                self.runtime_error(
+                    "ANVIL_RUNTIME_REGISTER_OUT_OF_BOUNDS",
+                    "bytecode register index is outside the register file".to_string(),
+                    span,
+                    vec!["valid register index".to_string()],
+                    Some(format!("register {register}")),
+                    Some("Report this as a compiler or VM bug.".to_string()),
+                )
+            })
     }
 
     fn set_register(&mut self, register: usize, value: Value, span: SourceSpan) -> VmResult<()> {
-        let Some(slot) = self.registers.get_mut(register) else {
+        let register_count = self.current_frame()?.registers.len();
+        if register >= register_count {
             return Err(self.runtime_error(
                 "ANVIL_RUNTIME_REGISTER_OUT_OF_BOUNDS",
                 "bytecode register index is outside the register file".to_string(),
@@ -971,8 +1211,53 @@ impl<'program> Interpreter<'program> {
                 Some("Report this as a compiler or VM bug.".to_string()),
             ));
         };
-        *slot = value;
+
+        self.current_frame_mut()?.registers[register] = value;
         Ok(())
+    }
+
+    fn current_frame(&self) -> VmResult<&ExecutionFrame> {
+        self.frames.last().ok_or_else(|| self.empty_frame_error())
+    }
+
+    fn current_frame_mut(&mut self) -> VmResult<&mut ExecutionFrame> {
+        if self.frames.is_empty() {
+            return Err(self.empty_frame_error());
+        }
+
+        Ok(self
+            .frames
+            .last_mut()
+            .expect("frame stack was checked before mutable access"))
+    }
+
+    fn instructions_for(&self, code: FrameCode) -> VmResult<&[BytecodeInstruction]> {
+        match code {
+            FrameCode::TopLevel => Ok(&self.program.instructions),
+            FrameCode::Function(function) => Ok(self
+                .function(function, SourceSpan::point(SourceLocation::start()))?
+                .instructions
+                .as_slice()),
+        }
+    }
+
+    fn last_instruction_span(&self, code: FrameCode) -> SourceSpan {
+        self.instructions_for(code)
+            .ok()
+            .and_then(|instructions| instructions.last())
+            .map(|instruction| instruction.span)
+            .unwrap_or_else(|| SourceSpan::point(SourceLocation::start()))
+    }
+
+    fn empty_frame_error(&self) -> Box<VmDiagnostic> {
+        self.runtime_error(
+            "ANVIL_RUNTIME_EMPTY_FRAME_STACK",
+            "VM frame stack is empty".to_string(),
+            SourceSpan::point(SourceLocation::start()),
+            vec!["active execution frame".to_string()],
+            Some("empty frame stack".to_string()),
+            Some("Report this as a VM bug.".to_string()),
+        )
     }
 
     fn runtime_error(
@@ -1112,6 +1397,7 @@ fn value_type_name(value: &Value) -> &'static str {
         Value::Keyword(_) => "keyword",
         Value::Vector(_) => "vector",
         Value::Map(_) => "map",
+        Value::Function(_) => "function",
     }
 }
 
@@ -1148,6 +1434,36 @@ mod tests {
         bindings: Vec<String>,
         register_count: usize,
     ) -> BytecodeProgram {
+        bytecode_with_all(
+            instructions,
+            constants,
+            bindings,
+            Vec::new(),
+            register_count,
+        )
+    }
+
+    fn bytecode_with_functions(
+        instructions: Vec<Instruction>,
+        functions: Vec<FunctionPrototype>,
+        register_count: usize,
+    ) -> BytecodeProgram {
+        bytecode_with_all(
+            instructions,
+            Vec::new(),
+            Vec::new(),
+            functions,
+            register_count,
+        )
+    }
+
+    fn bytecode_with_all(
+        instructions: Vec<Instruction>,
+        constants: Vec<Value>,
+        bindings: Vec<String>,
+        functions: Vec<FunctionPrototype>,
+        register_count: usize,
+    ) -> BytecodeProgram {
         let source = SourceText::new("malformed-bytecode", "broken");
         BytecodeProgram {
             version: BYTECODE_VERSION,
@@ -1155,6 +1471,7 @@ mod tests {
             register_count,
             constants,
             bindings,
+            functions,
             instructions: instructions
                 .into_iter()
                 .map(|instruction| BytecodeInstruction {
@@ -1235,8 +1552,56 @@ mod tests {
         assert_eq!(run_value("(+ 1 2.5)"), Value::Float64(3.5));
         assert_eq!(run_value("(- 10 3 2)"), Value::Integer(5));
         assert_eq!(run_value("(- 3)"), Value::Integer(-3));
+        assert_eq!(run_value("(- 3.5)"), Value::Float64(-3.5));
+        assert_eq!(run_value("(= 1 1)"), Value::Bool(true));
         assert_eq!(run_value("(= 1 1.0)"), Value::Bool(true));
         assert_eq!(run_value("(= 0 0.0 -0.0)"), Value::Bool(true));
+    }
+
+    #[test]
+    fn runs_named_function_values_with_call_frames() {
+        assert_eq!(
+            run_value(
+                r#"
+                (define add (fn [x y] (+ x y)))
+                (add 40 2)
+                "#,
+            ),
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn runs_direct_function_literals_and_multiexpression_bodies() {
+        assert_eq!(run_value("((fn [x] (* x x)) 6)"), Value::Integer(36));
+        assert_eq!(
+            run_value("((fn [x] (+ x 1) (* x 2)) 21)"),
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn function_parameters_shadow_top_level_bindings() {
+        assert_eq!(
+            run_value("(define x 100) ((fn [x] (+ x 1)) 41)"),
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn function_bodies_can_read_top_level_bindings() {
+        assert_eq!(
+            run_value("(define y 2) ((fn [x] (+ x y)) 40)"),
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn function_calls_return_composite_values() {
+        assert_eq!(
+            run_value("((fn [x] [x (+ x 1)]) 1)"),
+            Value::Vector(vec![Value::Integer(1), Value::Integer(2)])
+        );
     }
 
     #[test]
@@ -1246,18 +1611,27 @@ mod tests {
             Value::Bool(true),
             Value::Integer(7),
             Value::Float64(2.5),
-            Value::String("a\\b\"c\n".into()),
+            Value::String("a\\b\"c\n\r\t".into()),
             Value::Keyword("ready".into()),
             Value::Map(vec![ValueMapEntry {
                 key: Value::Keyword("nested".into()),
                 value: Value::Bool(false),
             }]),
+            Value::Function(FunctionValue { function: 7 }),
         ]);
 
         assert_eq!(
             value.to_string(),
-            "[nil true 7 2.5 \"a\\\\b\\\"c\\n\" :ready {:nested false}]"
+            "[nil true 7 2.5 \"a\\\\b\\\"c\\n\\r\\t\" :ready {:nested false} #<fn:7>]"
         );
+    }
+
+    #[test]
+    fn default_vm_runs_bytecode_programs() {
+        let program = compile_source("42").expect("bytecode");
+        let output = Vm::default().run(&program).expect("VM output");
+
+        assert_eq!(output.value, Value::Integer(42));
     }
 
     #[test]
@@ -1273,7 +1647,8 @@ mod tests {
 
     #[test]
     fn reports_unsupported_forms_as_compile_diagnostics() {
-        let diagnostic = compile_source("(fn [x] x)").expect_err("compile diagnostic");
+        let diagnostic =
+            compile_source("(require planner.search)").expect_err("compile diagnostic");
 
         assert_eq!(diagnostic.code, "ANVIL_COMPILE_UNSUPPORTED_FORM");
         assert_eq!(diagnostic.phase, DiagnosticPhase::Compile);
@@ -1290,12 +1665,20 @@ mod tests {
     }
 
     #[test]
-    fn reports_unsupported_calls_as_compile_diagnostics() {
-        let diagnostic = compile_source("(unknown 1)").expect_err("compile diagnostic");
+    fn reports_function_call_diagnostics() {
+        let not_callable = run_source("(42)").expect_err("runtime diagnostic");
+        assert_eq!(not_callable.code, "ANVIL_RUNTIME_NOT_CALLABLE");
+        assert_eq!(not_callable.phase, DiagnosticPhase::Runtime);
+        assert_eq!(not_callable.actual.as_deref(), Some("integer"));
 
-        assert_eq!(diagnostic.code, "ANVIL_COMPILE_UNSUPPORTED_CALL");
-        assert_eq!(diagnostic.phase, DiagnosticPhase::Compile);
-        assert_eq!(diagnostic.primary_span.start.column, 1);
+        let arity = run_source("((fn [x] x))").expect_err("runtime diagnostic");
+        assert_eq!(arity.code, "ANVIL_RUNTIME_ARITY");
+        assert_eq!(arity.phase, DiagnosticPhase::Runtime);
+        assert_eq!(arity.actual.as_deref(), Some("0 argument(s)"));
+
+        let unbound_callee = run_source("(unknown 1)").expect_err("runtime diagnostic");
+        assert_eq!(unbound_callee.code, "ANVIL_RUNTIME_UNBOUND_SYMBOL");
+        assert_eq!(unbound_callee.phase, DiagnosticPhase::Runtime);
     }
 
     #[test]
@@ -1314,8 +1697,22 @@ mod tests {
     }
 
     #[test]
+    fn runs_empty_do_and_zero_argument_numeric_equality() {
+        assert_eq!(run_value("(do)"), Value::Nil);
+        assert_eq!(run_value("(=)"), Value::Bool(true));
+    }
+
+    #[test]
     fn reports_exact_integer_overflow() {
         let diagnostic = run_source("(+ 9223372036854775807 1)").expect_err("runtime diagnostic");
+
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_NUMERIC_OVERFLOW");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Runtime);
+    }
+
+    #[test]
+    fn reports_exact_integer_negation_overflow() {
+        let diagnostic = run_source("(- -9223372036854775808)").expect_err("runtime diagnostic");
 
         assert_eq!(diagnostic.code, "ANVIL_RUNTIME_NUMERIC_OVERFLOW");
         assert_eq!(diagnostic.phase, DiagnosticPhase::Runtime);
@@ -1447,6 +1844,43 @@ mod tests {
                 Vec::new(),
             )),
             "ANVIL_RUNTIME_BINDING_OUT_OF_BOUNDS"
+        );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_function_out_of_bounds() {
+        assert_eq!(
+            runtime_code(bytecode_with_functions(
+                vec![Instruction::LoadFunction {
+                    dst: 0,
+                    function: 9,
+                }],
+                Vec::new(),
+                1,
+            )),
+            "ANVIL_RUNTIME_FUNCTION_OUT_OF_BOUNDS"
+        );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_function_value_out_of_bounds() {
+        assert_eq!(
+            runtime_code(bytecode_with_registers(
+                vec![
+                    Instruction::LoadConstant {
+                        dst: 0,
+                        constant: 0,
+                    },
+                    Instruction::CallFunction {
+                        dst: 0,
+                        callee: 0,
+                        args: Vec::new(),
+                    },
+                ],
+                vec![Value::Function(FunctionValue { function: 9 })],
+                1,
+            )),
+            "ANVIL_RUNTIME_FUNCTION_OUT_OF_BOUNDS"
         );
     }
 

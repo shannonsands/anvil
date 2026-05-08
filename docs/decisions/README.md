@@ -81,9 +81,11 @@ matter to code structure.
 - Initial bytecode VM foundation is register-based, source-mapped, and
   fuel-accounted. It executes top-level expression sequences, literals,
   vectors, ordered maps, `do`, `if`, top-level `define`, symbol lookup, and
-  checked bootstrap numeric primitive calls, while unsupported executable forms
-  produce compile-phase diagnostics and unbound symbols produce runtime
-  diagnostics.
+  checked bootstrap numeric primitive calls. It now also supports `fn` values,
+  explicit VM call frames, lexical parameter locals, named function calls, and
+  direct function literal calls, while unsupported executable forms produce
+  compile-phase diagnostics and unbound symbols/non-callable values produce
+  runtime diagnostics.
 - Ordinary language values use tracing GC as the primary memory model. The
   first real collector should be precise, stop-the-world, non-moving, and
   safe-point based, with opaque value references, immutable default values,
