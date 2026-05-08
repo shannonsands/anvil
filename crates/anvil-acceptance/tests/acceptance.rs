@@ -9,8 +9,8 @@ use anvil_core::{
     AnvilManifest, AstDiagnostic, DraftOverlay, ManifestDiagnostic, ModuleDiagnostic,
     ModuleResolution, ModuleResolver, ModuleRootKind, PackageSnapshot, PackageSourceFile,
     ProjectDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic,
-    SyntaxObject, format_ast, format_datums, load_package_snapshot, lower_source,
-    lower_source_with_resolver, parse_manifest, read_repl_input, syntax_from_source,
+    SyntaxObject, format_ast, format_datums, load_package_snapshot, load_workspace_snapshot,
+    lower_source, lower_source_with_resolver, parse_manifest, read_repl_input, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -144,6 +144,17 @@ async fn filesystem_package_source_contains(world: &mut AnvilWorld, path: String
     write_package_file(root, &path, &source);
 }
 
+#[given(expr = "filesystem package file {string}")]
+async fn filesystem_package_file(world: &mut AnvilWorld, path: String, #[step] step: &Step) {
+    let root = world
+        .filesystem_package_root
+        .as_ref()
+        .expect("filesystem package root");
+    let source = trim_docstring(step.docstring().expect("filesystem package file"));
+
+    write_package_file(root, &path, source);
+}
+
 #[when("the reader-backed REPL reads the input")]
 async fn reader_repl_reads_input(world: &mut AnvilWorld) {
     world.repl_response = Some(read_repl_input(&world.source));
@@ -271,6 +282,26 @@ async fn filesystem_package_snapshot_is_loaded(world: &mut AnvilWorld) {
         .expect("filesystem package root");
 
     match load_package_snapshot(root) {
+        Ok(snapshot) => {
+            world.module_resolver = snapshot.module_resolver();
+            world.project_diagnostic = None;
+            world.module_resolution = None;
+            world.module_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.project_diagnostic = Some(diagnostic);
+        }
+    }
+}
+
+#[when("the filesystem workspace snapshot is loaded")]
+async fn filesystem_workspace_snapshot_is_loaded(world: &mut AnvilWorld) {
+    let root = world
+        .filesystem_package_root
+        .as_ref()
+        .expect("filesystem package root");
+
+    match load_workspace_snapshot(root) {
         Ok(snapshot) => {
             world.module_resolver = snapshot.module_resolver();
             world.project_diagnostic = None;

@@ -71,6 +71,10 @@ matter to code structure.
   roots deterministically, loads `.anv` files into a package snapshot, and
   reports project-phase diagnostics for missing manifests and missing declared
   library files or source roots.
+- Initial workspace loading expands deterministic member patterns such as
+  `packages/*`, loads member package snapshots, registers member modules as
+  `workspace` roots, preserves root-package precedence, and surfaces missing
+  member manifests through project-phase diagnostics.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 

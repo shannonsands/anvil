@@ -64,6 +64,36 @@ pub struct PackageSourceFile {
     pub source: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkspaceSnapshot {
+    pub root: PackageSnapshot,
+    pub members: Vec<WorkspaceMemberSnapshot>,
+}
+
+impl WorkspaceSnapshot {
+    pub fn module_resolver(&self) -> ModuleResolver {
+        let mut resolver = self.root.module_resolver();
+        for member in &self.members {
+            for source in member.package.module_sources() {
+                resolver.add_source(ModuleSource::new(
+                    ModuleRootKind::Workspace,
+                    source.root_name,
+                    source.module,
+                    join_workspace_path(&member.path, &source.path),
+                ));
+            }
+        }
+
+        resolver
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkspaceMemberSnapshot {
+    pub path: String,
+    pub package: PackageSnapshot,
+}
+
 pub fn load_package_snapshot(root: impl AsRef<Path>) -> ProjectResult<PackageSnapshot> {
     let root = root.as_ref();
     let manifest_path = root.join("Anvil.toml");
@@ -84,6 +114,49 @@ pub fn load_package_snapshot(root: impl AsRef<Path>) -> ProjectResult<PackageSna
     collect_library_source(root, &mut snapshot)?;
 
     Ok(snapshot)
+}
+
+pub fn load_workspace_snapshot(root: impl AsRef<Path>) -> ProjectResult<WorkspaceSnapshot> {
+    let root = root.as_ref();
+    let root_package = load_package_snapshot(root)?;
+    let mut member_paths = Vec::new();
+    if let Some(workspace) = &root_package.manifest.workspace {
+        for pattern in &workspace.members {
+            member_paths.extend(expand_workspace_member_pattern(root, pattern)?);
+        }
+    }
+    member_paths.sort();
+    member_paths.dedup();
+
+    let mut members = Vec::new();
+    for member_path in member_paths {
+        let member_root = root.join(&member_path);
+        let manifest_path = member_root.join("Anvil.toml");
+        if !manifest_path.exists() {
+            return Err(project_error(ProjectDiagnosticSpec {
+                source_id: "project",
+                path: display_path(&manifest_path),
+                code: "ANVIL_PROJECT_WORKSPACE_MEMBER_MANIFEST_NOT_FOUND",
+                message: format!("workspace member {:?} is missing Anvil.toml", member_path),
+                expected: vec!["workspace member manifest".to_string()],
+                actual: Some("missing".to_string()),
+                suggestion: Some(
+                    "Add Anvil.toml to the member package or remove it from [workspace].members."
+                        .to_string(),
+                ),
+            }));
+        }
+
+        members.push(WorkspaceMemberSnapshot {
+            path: member_path,
+            package: load_package_snapshot(member_root)?,
+        });
+    }
+
+    Ok(WorkspaceSnapshot {
+        root: root_package,
+        members,
+    })
 }
 
 pub fn package_module_sources<I, P>(manifest: &AnvilManifest, paths: I) -> Vec<ModuleSource>
@@ -217,6 +290,98 @@ fn collect_source_files(
     Ok(())
 }
 
+fn expand_workspace_member_pattern(
+    workspace_root: &Path,
+    pattern: &str,
+) -> ProjectResult<Vec<String>> {
+    let pattern = normalize_path(pattern);
+    let segments = pattern
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let Some(wildcard_index) = segments.iter().position(|segment| segment.contains('*')) else {
+        let member_root = workspace_root.join(&pattern);
+        if !member_root.exists() {
+            return Err(project_error(ProjectDiagnosticSpec {
+                source_id: "project",
+                path: display_path(&member_root),
+                code: "ANVIL_PROJECT_WORKSPACE_MEMBER_NOT_FOUND",
+                message: format!("workspace member {pattern:?} was not found"),
+                expected: vec!["workspace member directory".to_string()],
+                actual: Some("missing".to_string()),
+                suggestion: Some("Check [workspace].members and the package path.".to_string()),
+            }));
+        }
+
+        return Ok(vec![pattern]);
+    };
+
+    let base = join_segments(&segments[..wildcard_index]);
+    let base_path = workspace_root.join(&base);
+    if !base_path.exists() {
+        return Err(project_error(ProjectDiagnosticSpec {
+            source_id: "project",
+            path: display_path(&base_path),
+            code: "ANVIL_PROJECT_WORKSPACE_MEMBER_ROOT_NOT_FOUND",
+            message: format!("workspace member root {base:?} was not found"),
+            expected: vec!["workspace member root directory".to_string()],
+            actual: Some("missing".to_string()),
+            suggestion: Some(
+                "Check [workspace].members and create the root directory.".to_string(),
+            ),
+        }));
+    }
+    if !base_path.is_dir() {
+        return Err(project_error(ProjectDiagnosticSpec {
+            source_id: "project",
+            path: display_path(&base_path),
+            code: "ANVIL_PROJECT_WORKSPACE_MEMBER_ROOT_NOT_DIRECTORY",
+            message: format!("workspace member root {base:?} is not a directory"),
+            expected: vec!["directory".to_string()],
+            actual: Some("file".to_string()),
+            suggestion: Some("Point wildcard workspace members at directories.".to_string()),
+        }));
+    }
+
+    let wildcard = segments[wildcard_index];
+    let suffix = join_segments(&segments[wildcard_index + 1..]);
+    let mut members = Vec::new();
+    let mut entries = fs::read_dir(&base_path)
+        .map_err(|error| {
+            project_io_error(
+                "ANVIL_PROJECT_READ_WORKSPACE_MEMBER_ROOT",
+                &base_path,
+                error,
+            )
+        })?
+        .collect::<Result<Vec<_>, io::Error>>()
+        .map_err(|error| {
+            project_io_error(
+                "ANVIL_PROJECT_READ_WORKSPACE_MEMBER_ROOT",
+                &base_path,
+                error,
+            )
+        })?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if !matches_workspace_segment(wildcard, &file_name) {
+            continue;
+        }
+        let mut member = join_segments(&[base.as_str(), file_name.as_str()]);
+        if !suffix.is_empty() {
+            member = join_workspace_path(&member, &suffix);
+        }
+        let member_path = workspace_root.join(&member);
+        if member_path.is_dir() {
+            members.push(member);
+        }
+    }
+
+    Ok(members)
+}
+
 fn push_module_source(
     sources: &mut Vec<ModuleSource>,
     seen: &mut BTreeSet<(String, String)>,
@@ -271,6 +436,34 @@ fn normalize_path(path: &str) -> String {
         normalized.drain(..2);
     }
     normalized
+}
+
+fn join_segments(segments: &[&str]) -> String {
+    segments
+        .iter()
+        .copied()
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn join_workspace_path(prefix: &str, suffix: &str) -> String {
+    let prefix = normalize_path(prefix).trim_matches('/').to_string();
+    let suffix = normalize_path(suffix).trim_matches('/').to_string();
+    match (prefix.is_empty(), suffix.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => suffix,
+        (false, true) => prefix,
+        (false, false) => format!("{prefix}/{suffix}"),
+    }
+}
+
+fn matches_workspace_segment(pattern: &str, value: &str) -> bool {
+    let Some((prefix, suffix)) = pattern.split_once('*') else {
+        return pattern == value;
+    };
+
+    value.starts_with(prefix) && value.ends_with(suffix)
 }
 
 fn read_project_file(
@@ -491,6 +684,84 @@ mod tests {
         assert_eq!(diagnostic.phase, DiagnosticPhase::Project);
     }
 
+    #[test]
+    fn loads_workspace_members_from_globs() {
+        let project = TestProject::new();
+        write_root_workspace(&project);
+        write_member_package(
+            &project,
+            "packages/planner",
+            "planner-tools",
+            "planner.tools",
+        );
+
+        let workspace = load_workspace_snapshot(project.path()).unwrap();
+        let resolver = workspace.module_resolver();
+
+        assert_eq!(workspace.members.len(), 1);
+        assert_eq!(
+            resolver.resolve("planner.search").unwrap().root_kind,
+            ModuleRootKind::Workspace
+        );
+        assert_eq!(
+            resolver.resolve("planner.search").unwrap().path,
+            "packages/planner/src/planner/search.anv"
+        );
+    }
+
+    #[test]
+    fn root_package_modules_shadow_workspace_members() {
+        let project = TestProject::new();
+        write_root_workspace(&project);
+        project.write("src/planner/search.anv", "(define root-search true)");
+        write_member_package(
+            &project,
+            "packages/planner",
+            "planner-tools",
+            "planner.tools",
+        );
+
+        let resolver = load_workspace_snapshot(project.path())
+            .unwrap()
+            .module_resolver();
+        let resolution = resolver.resolve("planner.search").unwrap();
+
+        assert_eq!(resolution.root_kind, ModuleRootKind::Package);
+        assert_eq!(resolution.root_name, "root-tools");
+        assert_eq!(resolution.path, "src/planner/search.anv");
+    }
+
+    #[test]
+    fn reports_missing_workspace_member_manifest() {
+        let project = TestProject::new();
+        write_root_workspace(&project);
+        project.write("packages/broken/src/lib.anv", "(define broken true)");
+
+        let diagnostic = load_workspace_snapshot(project.path()).unwrap_err();
+
+        assert_eq!(
+            diagnostic.code,
+            "ANVIL_PROJECT_WORKSPACE_MEMBER_MANIFEST_NOT_FOUND"
+        );
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Project);
+    }
+
+    #[test]
+    fn reports_ambiguous_workspace_modules_through_resolver() {
+        let project = TestProject::new();
+        write_root_workspace(&project);
+        write_member_package(&project, "packages/alpha", "alpha-tools", "alpha.tools");
+        write_member_package(&project, "packages/beta", "beta-tools", "beta.tools");
+
+        let resolver = load_workspace_snapshot(project.path())
+            .unwrap()
+            .module_resolver();
+        let diagnostic = resolver.resolve("planner.search").unwrap_err();
+
+        assert_eq!(diagnostic.code, "ANVIL_MODULE_AMBIGUOUS");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Module);
+    }
+
     fn test_manifest() -> AnvilManifest {
         parse_manifest(
             r#"
@@ -507,6 +778,52 @@ mod tests {
             "#,
         )
         .unwrap()
+    }
+
+    fn write_root_workspace(project: &TestProject) {
+        project.write(
+            "Anvil.toml",
+            r#"
+            [package]
+            name = "root-tools"
+            version = "0.1.0"
+
+            [lib]
+            module = "root.tools"
+            path = "src/lib.anv"
+
+            [workspace]
+            members = ["packages/*"]
+            "#,
+        );
+        project.write("src/lib.anv", "(define root true)");
+    }
+
+    fn write_member_package(
+        project: &TestProject,
+        path: &str,
+        package_name: &str,
+        lib_module: &str,
+    ) {
+        project.write(
+            &format!("{path}/Anvil.toml"),
+            &format!(
+                r#"
+                [package]
+                name = "{package_name}"
+                version = "0.1.0"
+
+                [lib]
+                module = "{lib_module}"
+                path = "src/lib.anv"
+                "#
+            ),
+        );
+        project.write(&format!("{path}/src/lib.anv"), "(define member true)");
+        project.write(
+            &format!("{path}/src/planner/search.anv"),
+            "(define search true)",
+        );
     }
 
     struct TestProject {

@@ -55,6 +55,9 @@ Current slice:
   loads `.anv` files into a package snapshot, and emits project-phase
   diagnostics for missing manifests and missing declared library files or source
   roots.
+- Workspace loading expands member patterns such as `packages/*`, loads member
+  package snapshots, registers member modules as `workspace` roots, preserves
+  root-package precedence, and reports missing member manifests.
 
 ## M3: Bytecode VM Foundation
 

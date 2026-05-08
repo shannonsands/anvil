@@ -56,6 +56,9 @@ The first executable acceptance harness is intentionally tiny but real:
 - `filesystem_package_loading.feature` covers loading a real package directory
   into the resolver, plus project-phase diagnostics for a missing `Anvil.toml`
   and missing declared library files or source roots.
+- `workspace_loading.feature` covers workspace member loading from
+  `[workspace].members`, root-package precedence over workspace members, missing
+  member manifests, and ambiguous workspace module diagnostics.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as
