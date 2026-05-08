@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "${ANVIL_SKIP_HOOKS:-0}" = "1" ]; then
+    exit 0
+fi
+
+if [ "${ANVIL_DEEP_ON_PUSH:-0}" = "1" ]; then
+    scripts/quality/deep.sh
+else
+    scripts/quality/push.sh
+fi

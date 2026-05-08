@@ -96,19 +96,29 @@ Quality gates are part of the design. Treat failures as design feedback:
 inspect the report, add focused tests, then refactor or split code before
 changing baselines.
 
-Current checks:
+Current tiers:
 
 ```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test -p anvil-acceptance --test acceptance
-cargo test --workspace --all-features
+make check-fast
+make check-push
+make check-deep
 ```
 
-As the repo grows, preserve the planned fast, push, and deep gate shape:
-formatting, linting, unit tests, Cucumber specs, coverage, CRAP analysis,
-mutation checks, architecture checks, dependency checks, duplication checks,
-performance baselines, risk reports, and coupling reports.
+Installed hooks use `.githooks`: pre-commit runs `scripts/quality/fast.sh`;
+pre-push runs `scripts/quality/push.sh`. Set `ANVIL_DEEP_ON_PUSH=1` to run
+mutation testing on push.
+
+`check-push` generates tarpaulin coverage and runs CRAP with threshold 30. The
+repo currently has no approved CRAP baseline. If CRAP fails, add meaningful
+coverage or refactor the function before considering any baseline.
+
+`check-deep` runs `cargo-mutants`. Mutation misses are test-quality feedback;
+add assertions that kill the mutant, or simplify/exclude only when the code is
+demonstrably not worth mutating and the exception is documented.
+
+As the repo grows, preserve the planned gate shape: architecture checks,
+dependency checks, duplication checks, performance baselines, risk reports, and
+coupling reports should become deterministic scripts rather than loose advice.
 
 Baseline increases require explicit human approval.
 

@@ -104,38 +104,14 @@ fn parse_output_format(args: Vec<String>) -> io::Result<OutputFormat> {
 fn run_repl(format: OutputFormat) -> io::Result<()> {
     let stdin = io::stdin();
     let interactive = stdin.is_terminal();
-
-    if interactive && format == OutputFormat::Text {
-        println!("Anvil reader REPL. Evaluation is not implemented yet.");
-        println!("Use :quit to exit.");
-    }
+    print_repl_banner(interactive, format);
 
     let mut session = ReplSession::new();
-
-    loop {
-        if interactive && format == OutputFormat::Text {
-            if session.is_pending() {
-                print!("....> ");
-            } else {
-                print!("anvil> ");
-            }
-            io::stdout().flush()?;
-        }
-
-        let mut line = String::new();
-        if stdin.read_line(&mut line)? == 0 {
-            if let Some(response) = session.finish() {
-                print_response(&response, format)?;
-            }
+    while let Some(line) = read_repl_line(&stdin, &mut session, interactive, format)? {
+        if is_repl_quit(&line) {
             break;
         }
-
-        let trimmed = line.trim();
-        if matches!(trimmed, ":quit" | ":q" | ":exit") {
-            break;
-        }
-
-        if interactive && trimmed.is_empty() {
+        if should_skip_repl_line(interactive, &line) {
             continue;
         }
 
@@ -144,6 +120,65 @@ fn run_repl(format: OutputFormat) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+fn print_repl_banner(interactive: bool, format: OutputFormat) {
+    if interactive && format == OutputFormat::Text {
+        println!("Anvil reader REPL. Evaluation is not implemented yet.");
+        println!("Use :quit to exit.");
+    }
+}
+
+fn read_repl_line(
+    stdin: &io::Stdin,
+    session: &mut ReplSession,
+    interactive: bool,
+    format: OutputFormat,
+) -> io::Result<Option<String>> {
+    print_repl_prompt(interactive, format, session)?;
+
+    let mut line = String::new();
+    if stdin.read_line(&mut line)? == 0 {
+        print_pending_repl_response(std::mem::take(session), format)?;
+        return Ok(None);
+    }
+
+    Ok(Some(line))
+}
+
+fn print_repl_prompt(
+    interactive: bool,
+    format: OutputFormat,
+    session: &ReplSession,
+) -> io::Result<()> {
+    if interactive && format == OutputFormat::Text {
+        print!("{}", repl_prompt(session));
+        io::stdout().flush()?;
+    }
+    Ok(())
+}
+
+fn repl_prompt(session: &ReplSession) -> &'static str {
+    if session.is_pending() {
+        "....> "
+    } else {
+        "anvil> "
+    }
+}
+
+fn print_pending_repl_response(session: ReplSession, format: OutputFormat) -> io::Result<()> {
+    if let Some(response) = session.finish() {
+        print_response(&response, format)?;
+    }
+    Ok(())
+}
+
+fn is_repl_quit(line: &str) -> bool {
+    matches!(line.trim(), ":quit" | ":q" | ":exit")
+}
+
+fn should_skip_repl_line(interactive: bool, line: &str) -> bool {
+    interactive && line.trim().is_empty()
 }
 
 fn read_command(args: Vec<String>) -> io::Result<()> {

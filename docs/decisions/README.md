@@ -39,7 +39,9 @@ matter to code structure.
 - Repo and quality gates: Anvil lives in its own repo, MightyGrad remains
   separate, Obsidian drives early requirements, repo-local docs grow with
   implementation, and Snapdragon-style fast/push/deep quality gates are part of
-  the engineering model.
+  the engineering model. The repo now has `.githooks`, `scripts/quality/`, and
+  `make check-fast`, `make check-push`, and `make check-deep`; CRAP currently
+  has no approved baseline.
 - Executable acceptance specs use Gherkin under `specs/` and a Rust-native
   Cucumber harness in the `anvil-acceptance` crate.
 - Implementation starts REPL-first: the first REPL is reader-backed and

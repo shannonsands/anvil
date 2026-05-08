@@ -36,19 +36,27 @@ own, including from Rust hosts and eventually other language bindings.
 
 ## Quality Gates
 
-Anvil should use Snapdragon-style quality gates as the codebase grows: fast,
-push, and deep tiers covering formatting, linting, tests, coverage, CRAP,
-mutation, specs, architecture, dependencies, performance, duplication, risk,
-and coupling.
+Anvil uses Snapdragon-style quality gates: fast, push, and deep tiers covering
+formatting, linting, tests, coverage, CRAP, mutation, specs, architecture,
+dependencies, performance, duplication, risk, and coupling.
 
-The current repo is still a scaffold. The available checks are:
+Install the local hooks once per checkout:
 
 ```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test -p anvil-acceptance --test acceptance
-cargo test --workspace --all-features
+make install-hooks
 ```
+
+Run the tiers directly with:
+
+```bash
+make check-fast
+make check-push
+make check-deep
+```
+
+`check-fast` runs on commit. `check-push` runs on push and includes
+coverage-backed CRAP analysis with no approved baseline. `check-deep` adds
+`cargo-mutants`; set `ANVIL_DEEP_ON_PUSH=1` to run it from the pre-push hook.
 
 ## Quick Start
 

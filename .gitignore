@@ -1,4 +1,8 @@
 /target/
+/mutants.out/
+/mutants.out.old/
+__pycache__/
+*.py[cod]
 /.direnv/
 /.env
 /.env.*

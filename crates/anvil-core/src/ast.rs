@@ -81,68 +81,69 @@ impl fmt::Display for AstKind {
                 else_branch,
             } => write!(f, "(if {condition} {then_branch} {else_branch})"),
             Self::Do { expressions } => write_sequence(f, "do", expressions),
-            Self::Fn { params, body } => {
-                write!(f, "(fn [")?;
-                for (index, param) in params.iter().enumerate() {
-                    if index > 0 {
-                        f.write_str(" ")?;
-                    }
-                    f.write_str(param)?;
-                }
-                f.write_str("]")?;
-                for expression in body {
-                    write!(f, " {expression}")?;
-                }
-                f.write_str(")")
-            }
-            Self::Require { imports } => {
-                f.write_str("(require")?;
-                for import in imports {
-                    write!(f, " {import}")?;
-                }
-                f.write_str(")")
-            }
-            Self::Call { callee, args } => {
-                write!(f, "({callee}")?;
-                for arg in args {
-                    write!(f, " {arg}")?;
-                }
-                f.write_str(")")
-            }
-            Self::Vector { items } => {
-                f.write_str("[")?;
-                for (index, item) in items.iter().enumerate() {
-                    if index > 0 {
-                        f.write_str(" ")?;
-                    }
-                    write!(f, "{item}")?;
-                }
-                f.write_str("]")
-            }
-            Self::Map { entries } => {
-                f.write_str("{")?;
-                for (index, entry) in entries.iter().enumerate() {
-                    if index > 0 {
-                        f.write_str(" ")?;
-                    }
-                    write!(f, "{} {}", entry.key, entry.value)?;
-                }
-                f.write_str("}")
-            }
+            Self::Fn { params, body } => write_fn(f, params, body),
+            Self::Require { imports } => write_sequence(f, "require", imports),
+            Self::Call { callee, args } => write_call(f, callee, args),
+            Self::Vector { items } => write_enclosed_items(f, "[", "]", items),
+            Self::Map { entries } => write_map(f, entries),
         }
     }
+}
+
+fn write_fn(f: &mut fmt::Formatter<'_>, params: &[String], body: &[SpannedAst]) -> fmt::Result {
+    f.write_str("(fn ")?;
+    write_enclosed_items(f, "[", "]", params)?;
+    for expression in body {
+        write!(f, " {expression}")?;
+    }
+    f.write_str(")")
+}
+
+fn write_call(f: &mut fmt::Formatter<'_>, callee: &SpannedAst, args: &[SpannedAst]) -> fmt::Result {
+    write!(f, "({callee}")?;
+    for arg in args {
+        write!(f, " {arg}")?;
+    }
+    f.write_str(")")
 }
 
 fn write_sequence(
     f: &mut fmt::Formatter<'_>,
     form_name: &str,
-    expressions: &[SpannedAst],
+    expressions: &[impl fmt::Display],
 ) -> fmt::Result {
     write!(f, "({form_name}")?;
     for expression in expressions {
         write!(f, " {expression}")?;
     }
     f.write_str(")")
+}
+
+fn write_enclosed_items(
+    f: &mut fmt::Formatter<'_>,
+    open: &str,
+    close: &str,
+    items: &[impl fmt::Display],
+) -> fmt::Result {
+    f.write_str(open)?;
+    let mut separator = "";
+    for item in items {
+        f.write_str(separator)?;
+        write!(f, "{item}")?;
+        separator = " ";
+    }
+    f.write_str(close)
+}
+
+fn write_map(f: &mut fmt::Formatter<'_>, entries: &[AstMapEntry]) -> fmt::Result {
+    f.write_str("{")?;
+    let mut separator = "";
+    for entry in entries {
+        f.write_str(separator)?;
+        write!(f, "{} {}", entry.key, entry.value)?;
+        separator = " ";
+    }
+    f.write_str("}")
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -659,6 +660,41 @@ mod tests {
 
         assert_eq!(format_ast(&ast), "(fn [x y] (+ x y))");
         assert!(matches!(ast[0].kind, AstKind::Fn { .. }));
+    }
+
+    #[test]
+    fn lowers_if_form() {
+        let ast = lower_source("(if ready? :yes :no)").unwrap();
+
+        assert_eq!(format_ast(&ast), "(if ready? :yes :no)");
+        assert!(matches!(ast[0].kind, AstKind::If { .. }));
+    }
+
+    #[test]
+    fn rejects_bad_if_arity() {
+        let diagnostic = lower_source("(if true 1)").unwrap_err();
+
+        assert_eq!(diagnostic.code, "ANVIL_SYNTAX_ARITY");
+        assert_eq!(diagnostic.primary_span.start.column, 2);
+    }
+
+    #[test]
+    fn formats_composite_ast_forms() {
+        let ast = lower_source(
+            r#"
+            (do
+              "line\n"
+              '[1 2]
+              {:answer 42}
+              [true nil])
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            format_ast(&ast),
+            r#"(do "line\n" '[1 2] {:answer 42} [true nil])"#
+        );
     }
 
     #[test]

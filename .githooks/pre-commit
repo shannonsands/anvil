@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "${ANVIL_SKIP_HOOKS:-0}" = "1" ]; then
+    exit 0
+fi
+
+scripts/quality/fast.sh
