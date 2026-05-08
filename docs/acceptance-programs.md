@@ -67,6 +67,9 @@ The first executable acceptance harness is intentionally tiny but real:
 - `bytecode_vm.feature` covers the first executable VM behavior: running
   literals, expression sequences, `if`, vectors, maps, compile diagnostics for
   unsupported forms, and runtime diagnostics for fuel exhaustion.
+- `resource_handles.feature` covers the first resource-handle substrate:
+  typed open, redacted display, use-site missing-capability denials, narrowed
+  delegation, rejected widening, and revocation.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as

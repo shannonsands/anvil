@@ -6,10 +6,12 @@ use std::{
 };
 
 use anvil_core::{
-    AnvilManifest, AstDiagnostic, DraftOverlay, ManifestDiagnostic, ModuleDiagnostic,
-    ModuleResolution, ModuleResolver, ModuleRootKind, PackageSnapshot, PackageSourceFile,
-    ProjectDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic,
-    SyntaxObject, Vm, VmBudget, VmDiagnostic, VmOutput, compile_source, format_ast, format_datums,
+    AnvilManifest, AstDiagnostic, DraftOverlay, HandleDelegationPolicy, HandleEntry, HandleTable,
+    ManifestDiagnostic, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
+    PackageSnapshot, PackageSourceFile, ProjectDiagnostic, ReplInteraction, ReplResponse,
+    ReplSession, ResourceDelegationRequest, ResourceEntry, ResourceError, ResourceOpenRequest,
+    ResourceOperationAuthorization, ResourceRegistry, SpannedAst, SyntaxDiagnostic, SyntaxObject,
+    Vm, VmBudget, VmDiagnostic, VmOutput, compile_source, format_ast, format_datums,
     load_package_snapshot, load_workspace_snapshot, lower_source, lower_source_with_resolver,
     parse_manifest, read_repl_input, run_source, syntax_from_source,
 };
@@ -40,6 +42,12 @@ struct AnvilWorld {
     project_diagnostic: Option<Box<ProjectDiagnostic>>,
     vm_output: Option<VmOutput>,
     vm_diagnostic: Option<Box<VmDiagnostic>>,
+    resource_registry: ResourceRegistry,
+    resource_handle_table: HandleTable,
+    resource_handle: Option<HandleEntry>,
+    delegated_resource_handle: Option<HandleEntry>,
+    resource_authorization: Option<ResourceOperationAuthorization>,
+    resource_error: Option<Box<ResourceError>>,
 }
 
 impl Drop for AnvilWorld {
@@ -61,6 +69,34 @@ async fn fresh_module_resolver(world: &mut AnvilWorld) {
     world.module_resolution = None;
     world.module_diagnostic = None;
     world.draft_overlay = None;
+}
+
+#[given("a fresh resource registry")]
+async fn fresh_resource_registry(world: &mut AnvilWorld) {
+    world.resource_registry = ResourceRegistry::new();
+    world.resource_handle_table = HandleTable::new();
+    world.resource_handle = None;
+    world.delegated_resource_handle = None;
+    world.resource_authorization = None;
+    world.resource_error = None;
+}
+
+#[given(
+    expr = "resource {string} of type {string} exists in trust zone {string} with operations {string}"
+)]
+async fn resource_exists_with_operations(
+    world: &mut AnvilWorld,
+    resource_id: String,
+    type_id: String,
+    trust_zone: String,
+    operations: String,
+) {
+    let mut resource = ResourceEntry::new(resource_id, type_id, "runtime", trust_zone)
+        .with_delegation_policy(HandleDelegationPolicy::NarrowOnly);
+    for operation in split_csv(&operations) {
+        resource.add_operation(operation.clone(), operation);
+    }
+    world.resource_registry.register(resource);
 }
 
 #[given(expr = "a fresh draft overlay {string} owned by {string}")]
@@ -93,6 +129,7 @@ async fn agent_input(world: &mut AnvilWorld, source: String) {
     world.syntax_diagnostic = None;
     world.vm_output = None;
     world.vm_diagnostic = None;
+    world.resource_error = None;
 }
 
 #[given("the agent input")]
@@ -160,6 +197,99 @@ async fn filesystem_package_file(world: &mut AnvilWorld, path: String, #[step] s
     let source = trim_docstring(step.docstring().expect("filesystem package file"));
 
     write_package_file(root, &path, source);
+}
+
+#[when(expr = "holder {string} opens resource {string} with grants {string}")]
+async fn holder_opens_resource(
+    world: &mut AnvilWorld,
+    holder: String,
+    resource_id: String,
+    grants: String,
+) {
+    match world.resource_registry.open_handle(
+        &mut world.resource_handle_table,
+        ResourceOpenRequest::new(holder, resource_id, split_csv(&grants)),
+    ) {
+        Ok(handle) => {
+            world.resource_handle = Some(handle);
+            world.resource_error = None;
+        }
+        Err(error) => {
+            world.resource_handle = None;
+            world.resource_error = Some(error);
+        }
+    }
+}
+
+#[when(expr = "the holder uses the resource handle for operation {string}")]
+async fn holder_uses_resource_handle(world: &mut AnvilWorld, operation: String) {
+    let handle_id = world
+        .resource_handle
+        .as_ref()
+        .expect("resource handle")
+        .handle_id
+        .clone();
+    match world.resource_registry.check_operation(
+        &world.resource_handle_table,
+        &handle_id,
+        &operation,
+    ) {
+        Ok(authorization) => {
+            world.resource_authorization = Some(authorization);
+            world.resource_error = None;
+        }
+        Err(error) => {
+            world.resource_authorization = None;
+            world.resource_error = Some(error);
+        }
+    }
+}
+
+#[when(expr = "the holder delegates the resource handle to {string} with grants {string}")]
+async fn holder_delegates_resource_handle(
+    world: &mut AnvilWorld,
+    delegate_to: String,
+    grants: String,
+) {
+    let handle_id = world
+        .resource_handle
+        .as_ref()
+        .expect("resource handle")
+        .handle_id
+        .clone();
+    match world.resource_registry.delegate_handle(
+        &mut world.resource_handle_table,
+        ResourceDelegationRequest::new(handle_id, delegate_to, split_csv(&grants)),
+    ) {
+        Ok(handle) => {
+            world.delegated_resource_handle = Some(handle);
+            world.resource_error = None;
+        }
+        Err(error) => {
+            world.delegated_resource_handle = None;
+            world.resource_error = Some(error);
+        }
+    }
+}
+
+#[when("the supervisor revokes the resource handle")]
+async fn supervisor_revokes_resource_handle(world: &mut AnvilWorld) {
+    let handle_id = world
+        .resource_handle
+        .as_ref()
+        .expect("resource handle")
+        .handle_id
+        .clone();
+
+    match world.resource_handle_table.revoke(&handle_id) {
+        Ok(handle) => {
+            world.resource_handle = Some(handle);
+            world.resource_error = None;
+        }
+        Err(error) => {
+            world.resource_error = Some(error);
+        }
+    }
 }
 
 #[when("the reader-backed REPL reads the input")]
@@ -856,6 +986,83 @@ async fn vm_diagnostic_primary_span_starts_at(
 
     assert_eq!(diagnostic.primary_span.start.line, expected_line);
     assert_eq!(diagnostic.primary_span.start.column, expected_column);
+}
+
+#[then(expr = "the resource handle type is {string}")]
+async fn resource_handle_type_is(world: &mut AnvilWorld, expected: String) {
+    let handle = world.resource_handle.as_ref().expect("resource handle");
+
+    assert_eq!(handle.type_id, expected);
+}
+
+#[then(expr = "the resource handle grants include {string}")]
+async fn resource_handle_grants_include(world: &mut AnvilWorld, expected: String) {
+    let handle = world.resource_handle.as_ref().expect("resource handle");
+
+    assert!(handle.has_grant(&expected));
+}
+
+#[then("the resource handle display hides the raw token")]
+async fn resource_handle_display_hides_raw_token(world: &mut AnvilWorld) {
+    let handle = world.resource_handle.as_ref().expect("resource handle");
+
+    assert!(!handle.display_summary().contains(&handle.handle_id));
+}
+
+#[then(expr = "the delegated resource handle holder is {string}")]
+async fn delegated_resource_handle_holder_is(world: &mut AnvilWorld, expected: String) {
+    let handle = delegated_resource_handle(world);
+
+    assert_eq!(handle.holder, expected);
+}
+
+#[then(expr = "the delegated resource handle grants include {string}")]
+async fn delegated_resource_handle_grants_include(world: &mut AnvilWorld, expected: String) {
+    let handle = delegated_resource_handle(world);
+
+    assert!(handle.has_grant(&expected));
+}
+
+#[then(expr = "the delegated resource handle grants do not include {string}")]
+async fn delegated_resource_handle_grants_do_not_include(world: &mut AnvilWorld, expected: String) {
+    let handle = delegated_resource_handle(world);
+
+    assert!(!handle.has_grant(&expected));
+}
+
+fn delegated_resource_handle(world: &mut AnvilWorld) -> &HandleEntry {
+    world
+        .delegated_resource_handle
+        .as_ref()
+        .expect("delegated resource handle")
+}
+
+#[then(expr = "the resource denial reason is {string}")]
+async fn resource_denial_reason_is(world: &mut AnvilWorld, expected: String) {
+    let error = resource_error(world);
+    let reason = serde_json::to_value(error.denial.reason).expect("reason JSON");
+
+    assert_eq!(reason, expected);
+}
+
+#[then(expr = "the resource denial phase is {string}")]
+async fn resource_denial_phase_is(world: &mut AnvilWorld, expected: String) {
+    let error = resource_error(world);
+    let diagnostic = serde_json::to_value(error.diagnostic.as_ref()).expect("diagnostic JSON");
+
+    assert_eq!(diagnostic["phase"], expected);
+}
+
+#[then(expr = "the resource audit decision is {string}")]
+async fn resource_audit_decision_is(world: &mut AnvilWorld, expected: String) {
+    let error = resource_error(world);
+    let decision = serde_json::to_value(error.audit_event.decision).expect("decision JSON");
+
+    assert_eq!(decision, expected);
+}
+
+fn resource_error(world: &mut AnvilWorld) -> &ResourceError {
+    world.resource_error.as_ref().expect("resource error")
 }
 
 fn trim_docstring(value: &str) -> &str {

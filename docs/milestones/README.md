@@ -87,7 +87,7 @@ Exit criteria:
 - Capability checks are precise and inspectable.
 - A module can run under multiple profiles with different authority.
 
-Current design slice:
+Current implementation slice:
 
 - Resource handles are locked as supervisor-issued, typed, revocable
   capabilities over host/runtime resources.
@@ -96,3 +96,6 @@ Current design slice:
 - Delegation creates a narrowed handle and never widens authority.
 - Live handles are not persisted into packages, bytecode caches, eval artifacts,
   model artifacts, or logs.
+- `anvil-core` now has initial resource registry, handle table, operation
+  schema, authorization, denial, and audit event structs.
+- `resource_handles.feature` covers the first executable resource contract.

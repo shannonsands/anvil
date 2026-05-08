@@ -6,6 +6,7 @@ pub mod module;
 pub mod project;
 pub mod reader;
 pub mod repl;
+pub mod resource;
 pub mod source;
 pub mod syntax;
 pub mod vm;
@@ -36,6 +37,14 @@ pub use reader::{
     Datum, ReaderDiagnostic, SpannedDatum, format_datums, read_source, read_source_text,
 };
 pub use repl::{ReplInteraction, ReplResponse, ReplSession, read_repl_input};
+pub use resource::{
+    HandleDelegationPolicy, HandleDisplayPolicy, HandleEntry, HandleRevocationState, HandleTable,
+    ResourceAuditDecision, ResourceAuditEvent, ResourceAuditKind, ResourceAuditPolicy,
+    ResourceBudgetPolicy, ResourceDebugPolicy, ResourceDelegationRequest, ResourceDenial,
+    ResourceDenialReason, ResourceDiagnostic, ResourceEffect, ResourceEntry, ResourceError,
+    ResourceLifetime, ResourceOpenRequest, ResourceOperationAuthorization, ResourceOperationSchema,
+    ResourcePolicy, ResourceRedactionPolicy, ResourceRegistry,
+};
 pub use source::{SourceLocation, SourceSpan, SourceText};
 pub use syntax::{
     SyntaxContext, SyntaxDiagnostic, SyntaxObject, format_syntax_objects, syntax_from_datums,

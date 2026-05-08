@@ -23,6 +23,34 @@ Implementation-facing decision:
 - Handle use must produce structured diagnostics and audit events, including
   precise denial reasons and safe suggestions for agents.
 
+## Implementation Status
+
+The first Rust substrate now exists in
+`crates/anvil-core/src/resource.rs`.
+
+Implemented in this slice:
+
+- `ResourceRegistry` and `ResourceEntry` for registered resource metadata.
+- `HandleTable` and `HandleEntry` for process/session-scoped handles.
+- `ResourceOperationSchema`, policy, lifetime, delegation, display, and
+  revocation enums.
+- `ResourceOpenRequest` and `ResourceDelegationRequest`.
+- `ResourceOperationAuthorization` for allowed use-site checks.
+- `ResourceError`, `ResourceDenial`, `ResourceDenialReason`, and
+  `ResourceAuditEvent`.
+- `DiagnosticPhase::Resource` for structured denial diagnostics.
+- Unit tests and `specs/resource_handles.feature` covering typed open,
+  redacted display, missing-capability denial, narrowed delegation, rejected
+  widening, and revocation.
+
+Not implemented yet:
+
+- Real host/resource adapters.
+- Async/blocking/streaming resource execution.
+- Capability-profile integration beyond handle grants.
+- Transport, TypeScript, or WASM facade token stores.
+- Persistent audit sinks.
+
 ## Core Model
 
 The runtime has two related tables:

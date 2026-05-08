@@ -16,6 +16,7 @@ pub enum DiagnosticPhase {
     Module,
     Manifest,
     Project,
+    Resource,
     Compile,
     Runtime,
 }

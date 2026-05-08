@@ -90,6 +90,10 @@ matter to code structure.
   host/runtime resources. They are used through per-process/session handle
   tables, checked at every operation boundary, delegated only through explicit
   narrowing, and serialized only as scoped opaque tokens.
+- Initial resource-handle Rust types exist in `anvil-core`: resource registry,
+  handle table, operation schema, open/delegate requests, use-site
+  authorization, denial diagnostics, audit events, and resource acceptance
+  specs.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 
@@ -101,8 +105,10 @@ matter to code structure.
 - Concrete persistent collection layouts, root-table implementation details,
   GC tuning, and later generational/incremental/compacting collector strategy
   beyond the initial tracing-GC contract.
-- Concrete Rust type layout for resource registries, handle tables, adapters,
-  resource operation schemas, and denial/audit event structs.
+- Resource adapter trait and execution contract for pure/effectful/blocking,
+  async, streaming, actor-backed, and device-backed resource operations.
+- Capability-profile integration for resource opening, operation grants,
+  delegation, revocation, and audit sinks.
 - Concrete runtime syntax for `defactor`, supervisors, atoms, channels,
   task groups, PubSub, hooks, watchers, event streams, and reactive forms.
 - Debugger and attach semantics: breakpoints, frame inspection, debug eval,
