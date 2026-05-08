@@ -46,6 +46,9 @@ Current slice:
   reports module diagnostics at the module name source span.
 - Draft overlay representation exists as an in-memory miniature worktree model,
   including resolver shadow metadata.
+- Minimal `Anvil.toml` parsing exists for package identity, library root,
+  source/test/eval/example roots, and workspace members, with manifest-phase
+  diagnostics for malformed TOML and missing required tables.
 
 ## M3: Bytecode VM Foundation
 

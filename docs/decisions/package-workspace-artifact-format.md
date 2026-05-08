@@ -23,10 +23,13 @@ Implementation-facing decision:
 - Tests and evals assert structured responses, diagnostics, spans, effects, and
   denials, not just printed output.
 
-Current implementation slice: an in-memory deterministic module resolver now
-models the resolution order and module diagnostics. Manifest parsing, filesystem
-walking, lockfile handling, and registry/dependency indexing remain later
-package-system work.
+Current implementation slice: an in-memory deterministic module resolver models
+the resolution order and module diagnostics, and the first `Anvil.toml` parser
+now reads package identity, library root, source/test/eval/example roots, and
+workspace members from TOML text with manifest-phase diagnostics. Filesystem
+walking, lockfile handling, registry/dependency indexing, bins, capabilities,
+budgets, and package metadata remain later package-system work.
 
-Open implementation dependency: exact manifest schema and value serialization
-should be chosen with the reader syntax and diagnostics protocol.
+Open implementation dependency: full manifest schema and value serialization
+should be chosen with the reader syntax, diagnostics protocol, capability
+model, and lockfile design.

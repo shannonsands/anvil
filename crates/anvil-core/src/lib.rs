@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod diagnostic;
 pub mod draft;
+pub mod manifest;
 pub mod module;
 pub mod reader;
 pub mod repl;
@@ -17,6 +18,10 @@ pub use diagnostic::{
     DiagnosticSuggestion,
 };
 pub use draft::{DraftModule, DraftOverlay, DraftStatus};
+pub use manifest::{
+    AnvilManifest, LibraryManifest, ManifestDiagnostic, PackageManifest, SourceRoots,
+    WorkspaceManifest, parse_manifest, parse_manifest_text,
+};
 pub use module::{
     ModuleCandidate, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
     ModuleSource,

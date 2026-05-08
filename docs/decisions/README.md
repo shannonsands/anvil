@@ -61,6 +61,9 @@ matter to code structure.
 - Initial draft overlays are in-memory miniature worktrees with owner, status,
   source overrides, virtual draft paths, diagnostics, and resolver shadow
   metadata.
+- Initial `Anvil.toml` parsing reads package identity, library root,
+  source/test/eval/example roots, and workspace members, with manifest-phase
+  diagnostics for malformed TOML and missing required tables.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 

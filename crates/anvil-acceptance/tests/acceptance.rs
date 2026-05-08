@@ -1,10 +1,10 @@
 use std::path::Path;
 
 use anvil_core::{
-    AstDiagnostic, DraftOverlay, ModuleDiagnostic, ModuleResolution, ModuleResolver,
-    ModuleRootKind, ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic,
-    SyntaxObject, format_ast, format_datums, lower_source, lower_source_with_resolver,
-    read_repl_input, syntax_from_source,
+    AnvilManifest, AstDiagnostic, DraftOverlay, ManifestDiagnostic, ModuleDiagnostic,
+    ModuleResolution, ModuleResolver, ModuleRootKind, ReplInteraction, ReplResponse, ReplSession,
+    SpannedAst, SyntaxDiagnostic, SyntaxObject, format_ast, format_datums, lower_source,
+    lower_source_with_resolver, parse_manifest, read_repl_input, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -25,6 +25,9 @@ struct AnvilWorld {
     module_resolution: Option<ModuleResolution>,
     module_diagnostic: Option<Box<ModuleDiagnostic>>,
     draft_overlay: Option<DraftOverlay>,
+    manifest_source: String,
+    manifest: Option<AnvilManifest>,
+    manifest_diagnostic: Option<Box<ManifestDiagnostic>>,
 }
 
 #[given("a fresh Anvil planning scaffold")]
@@ -79,6 +82,13 @@ async fn agent_doc_input(world: &mut AnvilWorld, #[step] step: &Step) {
     world.ast_diagnostic = None;
     world.syntax_objects = None;
     world.syntax_diagnostic = None;
+}
+
+#[given("the manifest input")]
+async fn manifest_input(world: &mut AnvilWorld, #[step] step: &Step) {
+    world.manifest_source = trim_docstring(step.docstring().expect("manifest input")).to_string();
+    world.manifest = None;
+    world.manifest_diagnostic = None;
 }
 
 #[when("the reader-backed REPL reads the input")]
@@ -167,6 +177,20 @@ async fn draft_overlay_adds_module(world: &mut AnvilWorld, module: String, sourc
         .as_mut()
         .expect("draft overlay")
         .add_module(module, source);
+}
+
+#[when("the manifest is parsed")]
+async fn manifest_is_parsed(world: &mut AnvilWorld) {
+    match parse_manifest(&world.manifest_source) {
+        Ok(manifest) => {
+            world.manifest = Some(manifest);
+            world.manifest_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.manifest = None;
+            world.manifest_diagnostic = Some(diagnostic);
+        }
+    }
 }
 
 #[when(expr = "the module resolver resolves {string}")]
@@ -536,8 +560,101 @@ fn first_draft_module(world: &mut AnvilWorld) -> &anvil_core::DraftModule {
         .expect("first draft module")
 }
 
+#[then(expr = "the manifest package name is {string}")]
+async fn manifest_package_name_is(world: &mut AnvilWorld, expected: String) {
+    let manifest = world.manifest.as_ref().expect("manifest");
+
+    assert_eq!(manifest.package.name, expected);
+}
+
+#[then(expr = "the manifest package version is {string}")]
+async fn manifest_package_version_is(world: &mut AnvilWorld, expected: String) {
+    let manifest = world.manifest.as_ref().expect("manifest");
+
+    assert_eq!(manifest.package.version, expected);
+}
+
+#[then(expr = "the manifest lib module is {string}")]
+async fn manifest_lib_module_is(world: &mut AnvilWorld, expected: String) {
+    let manifest = world.manifest.as_ref().expect("manifest");
+
+    assert_eq!(manifest.lib.module, expected);
+}
+
+#[then(expr = "the manifest lib path is {string}")]
+async fn manifest_lib_path_is(world: &mut AnvilWorld, expected: String) {
+    let manifest = world.manifest.as_ref().expect("manifest");
+
+    assert_eq!(manifest.lib.path, expected);
+}
+
+#[then(expr = "the manifest source roots are {string}")]
+async fn manifest_source_roots_are(world: &mut AnvilWorld, expected: String) {
+    let manifest = world.manifest.as_ref().expect("manifest");
+
+    assert_eq!(manifest.source.roots, split_csv(&expected));
+}
+
+#[then(expr = "the manifest test roots are {string}")]
+async fn manifest_test_roots_are(world: &mut AnvilWorld, expected: String) {
+    let manifest = world.manifest.as_ref().expect("manifest");
+
+    assert_eq!(manifest.source.tests, split_csv(&expected));
+}
+
+#[then(expr = "the manifest eval roots are {string}")]
+async fn manifest_eval_roots_are(world: &mut AnvilWorld, expected: String) {
+    let manifest = world.manifest.as_ref().expect("manifest");
+
+    assert_eq!(manifest.source.evals, split_csv(&expected));
+}
+
+#[then(expr = "the manifest example roots are {string}")]
+async fn manifest_example_roots_are(world: &mut AnvilWorld, expected: String) {
+    let manifest = world.manifest.as_ref().expect("manifest");
+
+    assert_eq!(manifest.source.examples, split_csv(&expected));
+}
+
+#[then(expr = "the manifest workspace members are {string}")]
+async fn manifest_workspace_members_are(world: &mut AnvilWorld, expected: String) {
+    let manifest = world.manifest.as_ref().expect("manifest");
+    let workspace = manifest.workspace.as_ref().expect("workspace manifest");
+
+    assert_eq!(workspace.members, split_csv(&expected));
+}
+
+#[then(expr = "the manifest diagnostic code is {string}")]
+async fn manifest_diagnostic_code_is(world: &mut AnvilWorld, expected: String) {
+    let diagnostic = world
+        .manifest_diagnostic
+        .as_ref()
+        .expect("manifest diagnostic");
+
+    assert_eq!(diagnostic.code, expected);
+}
+
+#[then(expr = "the manifest diagnostic phase is {string}")]
+async fn manifest_diagnostic_phase_is(world: &mut AnvilWorld, expected: String) {
+    let diagnostic = world
+        .manifest_diagnostic
+        .as_ref()
+        .expect("manifest diagnostic");
+    let json = serde_json::to_value(diagnostic).expect("diagnostic JSON");
+
+    assert_eq!(json["phase"], expected);
+}
+
 fn trim_docstring(value: &str) -> &str {
     value.trim_matches('\n')
+}
+
+fn split_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .filter(|part| !part.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 #[then("the response is a reader error")]
