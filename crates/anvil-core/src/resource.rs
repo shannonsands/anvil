@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use crate::{
+    capability::CapabilityProfile,
     diagnostic::{Diagnostic, DiagnosticPhase, DiagnosticSpec},
     source::{SourceLocation, SourceSpan, SourceText},
     vm::Value,
@@ -110,7 +111,7 @@ pub enum ResourceEffect {
 }
 
 impl ResourceEffect {
-    fn from_operation(operation: &str) -> Self {
+    pub fn from_operation(operation: &str) -> Self {
         match operation {
             "import" | "open" => Self::Import,
             "read" => Self::Read,
@@ -121,6 +122,20 @@ impl ResourceEffect {
             "close" => Self::Close,
             "revoke" => Self::Revoke,
             _ => Self::Call,
+        }
+    }
+
+    pub const fn capability_name(self) -> &'static str {
+        match self {
+            Self::Import => "resource/open",
+            Self::Read => "resource/read",
+            Self::Write => "resource/write",
+            Self::Call => "resource/call",
+            Self::Stream => "resource/stream",
+            Self::Inspect => "resource/inspect",
+            Self::Delegate => "resource/delegate",
+            Self::Close => "resource/close",
+            Self::Revoke => "resource/revoke",
         }
     }
 }
@@ -358,6 +373,44 @@ pub struct ResourceRegistry {
     resources: BTreeMap<String, ResourceEntry>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ResourceAuthorityContext<'value> {
+    operation: &'value str,
+    handle_id: Option<&'value str>,
+    resource_id: Option<&'value str>,
+    type_id: Option<&'value str>,
+    holder: Option<&'value str>,
+    trust_zone: Option<&'value str>,
+}
+
+impl<'value> ResourceAuthorityContext<'value> {
+    fn for_resource(
+        operation: &'value str,
+        resource: &'value ResourceEntry,
+        holder: &'value str,
+    ) -> Self {
+        Self {
+            operation,
+            handle_id: None,
+            resource_id: Some(&resource.resource_id),
+            type_id: Some(&resource.type_id),
+            holder: Some(holder),
+            trust_zone: Some(&resource.trust_zone),
+        }
+    }
+
+    fn for_handle(operation: &'value str, handle: &'value HandleEntry) -> Self {
+        Self {
+            operation,
+            handle_id: Some(&handle.handle_id),
+            resource_id: Some(&handle.resource_id),
+            type_id: Some(&handle.type_id),
+            holder: Some(&handle.holder),
+            trust_zone: Some(&handle.trust_zone),
+        }
+    }
+}
+
 impl ResourceRegistry {
     pub fn new() -> Self {
         Self::default()
@@ -386,6 +439,19 @@ impl ResourceRegistry {
         let handle = HandleEntry::new(handle_id, resource, request.holder, request.grants);
         table.insert(handle.clone());
         Ok(handle)
+    }
+
+    pub fn open_handle_with_profile(
+        &self,
+        table: &mut HandleTable,
+        profile: &CapabilityProfile,
+        request: ResourceOpenRequest,
+    ) -> ResourceResult<HandleEntry> {
+        let resource = self.resource_or_error(&request.resource_id, "open")?;
+        self.ensure_requested_grants(resource, &request.grants, "open")?;
+        self.ensure_profile_can_open_resource(profile, resource, &request)?;
+
+        self.open_handle(table, request)
     }
 
     pub fn check_operation(
@@ -417,6 +483,22 @@ impl ResourceRegistry {
         })
     }
 
+    pub fn check_operation_with_profile(
+        &self,
+        table: &HandleTable,
+        profile: &CapabilityProfile,
+        handle_id: &str,
+        operation: &str,
+    ) -> ResourceResult<ResourceOperationAuthorization> {
+        let authorization = self.check_operation(table, handle_id, operation)?;
+        let handle = self.handle_or_error(table, handle_id, operation)?;
+        let resource = self.resource_or_error(&handle.resource_id, operation)?;
+        let schema = self.operation_schema_or_error(resource, handle, operation)?;
+        self.ensure_profile_can_use_operation(profile, handle, schema, operation)?;
+
+        Ok(authorization)
+    }
+
     pub fn execute_operation<A: ResourceAdapter + ?Sized>(
         &self,
         table: &HandleTable,
@@ -424,6 +506,41 @@ impl ResourceRegistry {
         request: ResourceOperationRequest,
     ) -> ResourceResult<ResourceOperationOutcome> {
         let authorization = self.check_operation(table, &request.handle_id, &request.operation)?;
+        let handle = self.handle_or_error(table, &request.handle_id, &request.operation)?;
+        self.ensure_adapter_matches(adapter, &authorization, handle)?;
+
+        let execution_mode = adapter.execution_mode(&authorization.operation);
+        let adapter_request = ResourceAdapterRequest {
+            authorization: &authorization,
+            handle,
+            payload: request.payload,
+            execution_mode,
+        };
+        let adapter_outcome = adapter
+            .execute(adapter_request)
+            .map_err(|failure| adapter_failure_error(&authorization, handle, failure))?;
+
+        Ok(ResourceOperationOutcome {
+            audit_events: vec![authorization.audit_event.clone()],
+            authorization,
+            execution_mode,
+            adapter: adapter_outcome,
+        })
+    }
+
+    pub fn execute_operation_with_profile<A: ResourceAdapter + ?Sized>(
+        &self,
+        table: &HandleTable,
+        profile: &CapabilityProfile,
+        adapter: &mut A,
+        request: ResourceOperationRequest,
+    ) -> ResourceResult<ResourceOperationOutcome> {
+        let authorization = self.check_operation_with_profile(
+            table,
+            profile,
+            &request.handle_id,
+            &request.operation,
+        )?;
         let handle = self.handle_or_error(table, &request.handle_id, &request.operation)?;
         self.ensure_adapter_matches(adapter, &authorization, handle)?;
 
@@ -464,6 +581,200 @@ impl ResourceRegistry {
         let delegated = source.delegated(handle_id, request.delegate_to, request.grants);
         table.insert(delegated.clone());
         Ok(delegated)
+    }
+
+    pub fn delegate_handle_with_profile(
+        &self,
+        table: &mut HandleTable,
+        profile: &CapabilityProfile,
+        request: ResourceDelegationRequest,
+    ) -> ResourceResult<HandleEntry> {
+        let source = self
+            .handle_or_error(table, &request.source_handle_id, "delegate")?
+            .clone();
+        self.ensure_active(&source, "delegate")?;
+        let resource = self.resource_or_error(&source.resource_id, "delegate")?;
+        self.ensure_handle_matches_resource(&source, resource, "delegate")?;
+        self.ensure_requested_grants(resource, &request.grants, "delegate")?;
+        self.ensure_profile_can_delegate(profile, &source, resource, &request.grants)?;
+        self.ensure_delegation_allowed(&source, &request.grants)?;
+
+        let handle_id = request
+            .handle_id
+            .unwrap_or_else(|| table.allocate_handle_id());
+        let delegated = source.delegated(handle_id, request.delegate_to, request.grants);
+        table.insert(delegated.clone());
+        Ok(delegated)
+    }
+
+    pub fn revoke_handle_with_profile(
+        &self,
+        table: &mut HandleTable,
+        profile: &CapabilityProfile,
+        handle_id: &str,
+    ) -> ResourceResult<HandleEntry> {
+        let handle = self.handle_or_error(table, handle_id, "revoke")?.clone();
+        let resource = self.resource_or_error(&handle.resource_id, "revoke")?;
+        self.ensure_handle_matches_resource(&handle, resource, "revoke")?;
+        let context = ResourceAuthorityContext::for_handle("revoke", &handle);
+        self.ensure_profile_trust_zone(profile, &handle.trust_zone, context)?;
+        self.ensure_profile_capability(profile, ResourceEffect::Revoke.capability_name(), context)?;
+
+        table.revoke(handle_id)
+    }
+
+    fn ensure_profile_can_open_resource(
+        &self,
+        profile: &CapabilityProfile,
+        resource: &ResourceEntry,
+        request: &ResourceOpenRequest,
+    ) -> ResourceResult<()> {
+        let context = ResourceAuthorityContext::for_resource("open", resource, &request.holder);
+
+        self.ensure_profile_holder(profile, &request.holder, context)?;
+        self.ensure_profile_trust_zone(profile, &resource.trust_zone, context)?;
+        self.ensure_profile_capability(profile, ResourceEffect::Import.capability_name(), context)?;
+
+        for grant in &request.grants {
+            let schema = self.operation_schema_for_grant_or_error(resource, grant, "open")?;
+            self.ensure_profile_schema_capability(profile, schema, context)?;
+        }
+
+        Ok(())
+    }
+
+    fn ensure_profile_can_use_operation(
+        &self,
+        profile: &CapabilityProfile,
+        handle: &HandleEntry,
+        schema: &ResourceOperationSchema,
+        operation: &str,
+    ) -> ResourceResult<()> {
+        let context = ResourceAuthorityContext::for_handle(operation, handle);
+
+        self.ensure_profile_holder(profile, &handle.holder, context)?;
+        self.ensure_profile_trust_zone(profile, &handle.trust_zone, context)?;
+        self.ensure_profile_schema_capability(profile, schema, context)
+    }
+
+    fn ensure_profile_can_delegate(
+        &self,
+        profile: &CapabilityProfile,
+        source: &HandleEntry,
+        resource: &ResourceEntry,
+        grants: &[String],
+    ) -> ResourceResult<()> {
+        self.ensure_profile_can_use_operation(
+            profile,
+            source,
+            &ResourceOperationSchema::new("delegate", ResourceEffect::Delegate.capability_name()),
+            "delegate",
+        )?;
+        let context = ResourceAuthorityContext::for_handle("delegate", source);
+
+        for grant in grants {
+            let schema = self.operation_schema_for_grant_or_error(resource, grant, "delegate")?;
+            self.ensure_profile_schema_capability(profile, schema, context)?;
+        }
+
+        Ok(())
+    }
+
+    fn ensure_profile_holder(
+        &self,
+        profile: &CapabilityProfile,
+        holder: &str,
+        context: ResourceAuthorityContext<'_>,
+    ) -> ResourceResult<()> {
+        if profile.principal == holder {
+            return Ok(());
+        }
+
+        Err(ResourceError::new(ResourceErrorSpec {
+            reason: ResourceDenialReason::CapabilityDenied,
+            operation: context.operation,
+            handle_id: context.handle_id,
+            resource_id: context.resource_id,
+            type_id: context.type_id,
+            holder: Some(holder),
+            trust_zone: context.trust_zone,
+            expected: vec![format!("principal:{}", profile.principal)],
+            actual: Some(holder),
+            missing_capability: Some("profile/principal"),
+        }))
+    }
+
+    fn ensure_profile_trust_zone(
+        &self,
+        profile: &CapabilityProfile,
+        trust_zone: &str,
+        context: ResourceAuthorityContext<'_>,
+    ) -> ResourceResult<()> {
+        if profile.allows_trust_zone(trust_zone) {
+            return Ok(());
+        }
+
+        Err(ResourceError::new(ResourceErrorSpec {
+            reason: ResourceDenialReason::WrongTrustZone,
+            operation: context.operation,
+            handle_id: context.handle_id,
+            resource_id: context.resource_id,
+            type_id: context.type_id,
+            holder: context.holder,
+            trust_zone: Some(trust_zone),
+            expected: profile
+                .trust_zones
+                .iter()
+                .map(|zone| format!("trust_zone:{zone}"))
+                .collect(),
+            actual: Some(trust_zone),
+            missing_capability: None,
+        }))
+    }
+
+    fn ensure_profile_schema_capability(
+        &self,
+        profile: &CapabilityProfile,
+        schema: &ResourceOperationSchema,
+        context: ResourceAuthorityContext<'_>,
+    ) -> ResourceResult<()> {
+        let preferred = preferred_profile_capability(schema);
+        if profile.allows_any_capability([
+            preferred,
+            schema.required_capability.as_str(),
+            schema.effect.capability_name(),
+        ]) {
+            return Ok(());
+        }
+
+        self.ensure_profile_capability(profile, preferred, context)
+    }
+
+    fn ensure_profile_capability(
+        &self,
+        profile: &CapabilityProfile,
+        capability: &str,
+        context: ResourceAuthorityContext<'_>,
+    ) -> ResourceResult<()> {
+        if profile.allows_capability(capability) {
+            return Ok(());
+        }
+
+        Err(ResourceError::new(ResourceErrorSpec {
+            reason: ResourceDenialReason::CapabilityDenied,
+            operation: context.operation,
+            handle_id: context.handle_id,
+            resource_id: context.resource_id,
+            type_id: context.type_id,
+            holder: context.holder,
+            trust_zone: context.trust_zone,
+            expected: vec![
+                format!("profile:{}", profile.profile_id),
+                format!("capability:{capability}"),
+            ],
+            actual: Some(&profile.profile_id),
+            missing_capability: Some(capability),
+        }))
     }
 
     fn resource_or_error(
@@ -532,6 +843,33 @@ impl ResourceRegistry {
         }
 
         Ok(())
+    }
+
+    fn operation_schema_for_grant_or_error<'resource>(
+        &self,
+        resource: &'resource ResourceEntry,
+        grant: &str,
+        operation: &str,
+    ) -> ResourceResult<&'resource ResourceOperationSchema> {
+        resource
+            .operations
+            .iter()
+            .find(|schema| schema.required_capability == grant)
+            .ok_or_else(|| {
+                let supported = resource.supported_capabilities();
+                ResourceError::new(ResourceErrorSpec {
+                    reason: ResourceDenialReason::MissingCapability,
+                    operation,
+                    handle_id: None,
+                    resource_id: Some(&resource.resource_id),
+                    type_id: Some(&resource.type_id),
+                    holder: None,
+                    trust_zone: Some(&resource.trust_zone),
+                    expected: supported.into_iter().collect(),
+                    actual: Some(grant),
+                    missing_capability: Some(grant),
+                })
+            })
     }
 
     fn ensure_active(&self, handle: &HandleEntry, operation: &str) -> ResourceResult<()> {
@@ -1071,6 +1409,7 @@ pub enum ResourceDenialReason {
     WrongResourceType,
     WrongTrustZone,
     MissingCapability,
+    CapabilityDenied,
     DelegationDenied,
     SerializationDenied,
     BudgetExhausted,
@@ -1090,6 +1429,7 @@ impl ResourceDenialReason {
             Self::WrongResourceType => "ANVIL_RESOURCE_WRONG_TYPE",
             Self::WrongTrustZone => "ANVIL_RESOURCE_WRONG_TRUST_ZONE",
             Self::MissingCapability => "ANVIL_RESOURCE_MISSING_CAPABILITY",
+            Self::CapabilityDenied => "ANVIL_RESOURCE_CAPABILITY_DENIED",
             Self::DelegationDenied => "ANVIL_RESOURCE_DELEGATION_DENIED",
             Self::SerializationDenied => "ANVIL_RESOURCE_SERIALIZATION_DENIED",
             Self::BudgetExhausted => "ANVIL_RESOURCE_BUDGET_EXHAUSTED",
@@ -1109,6 +1449,7 @@ impl ResourceDenialReason {
             Self::WrongResourceType => "resource handle type does not match resource",
             Self::WrongTrustZone => "resource handle is not valid in this trust zone",
             Self::MissingCapability => "resource handle is missing a required capability",
+            Self::CapabilityDenied => "capability profile does not allow resource operation",
             Self::DelegationDenied => "resource handle delegation is not allowed",
             Self::SerializationDenied => "resource handle cannot be serialized here",
             Self::BudgetExhausted => "resource budget is exhausted",
@@ -1128,6 +1469,9 @@ impl ResourceDenialReason {
             Self::WrongResourceType => "Use a handle with the expected resource type.",
             Self::WrongTrustZone => "Run in the matching trust zone or request delegation.",
             Self::MissingCapability => "Request a handle with the required capability.",
+            Self::CapabilityDenied => {
+                "Run under a profile with the required capability or request a narrower handle."
+            }
             Self::DelegationDenied => "Delegate a narrowed handle that policy allows.",
             Self::SerializationDenied => "Pass a resource requirement instead of a live handle.",
             Self::BudgetExhausted => "Retry with a larger budget or a smaller resource operation.",
@@ -1252,6 +1596,14 @@ fn adapter_failure_error(
         actual: Some(&actual),
         missing_capability: None,
     })
+}
+
+fn preferred_profile_capability(schema: &ResourceOperationSchema) -> &str {
+    if schema.required_capability == schema.operation {
+        schema.effect.capability_name()
+    } else {
+        &schema.required_capability
+    }
 }
 
 fn resource_diagnostic(
@@ -1559,6 +1911,131 @@ mod tests {
         assert_eq!(error.diagnostic.phase, DiagnosticPhase::Resource);
     }
 
+    #[test]
+    fn profile_allows_opening_selected_grants() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let profile = read_profile();
+
+        let handle = registry
+            .open_handle_with_profile(
+                &mut table,
+                &profile,
+                ResourceOpenRequest::new("agent.alpha", "markodb:papers", vec!["read".into()]),
+            )
+            .expect("profile authorized handle");
+
+        assert!(handle.has_grant("read"));
+        assert_eq!(handle.holder, "agent.alpha");
+    }
+
+    #[test]
+    fn profile_denies_opening_ungranted_write() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let profile = read_profile();
+
+        let error = registry
+            .open_handle_with_profile(
+                &mut table,
+                &profile,
+                ResourceOpenRequest::new("agent.alpha", "markodb:papers", vec!["write".into()]),
+            )
+            .expect_err("profile lacks write authority");
+
+        assert_eq!(error.denial.reason, ResourceDenialReason::CapabilityDenied);
+        assert_eq!(
+            error.denial.missing_capability.as_deref(),
+            Some("resource/write")
+        );
+        assert!(table.handles().next().is_none());
+    }
+
+    #[test]
+    fn profile_denies_adapter_execution_before_call() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let handle = registry
+            .open_handle(
+                &mut table,
+                ResourceOpenRequest::new("agent.alpha", "markodb:papers", vec!["write".into()]),
+            )
+            .expect("handle");
+        let profile = read_profile();
+        let mut adapter = TestAdapter::new("markodb.adapter", "markodb.collection", ["write"]);
+
+        let error = registry
+            .execute_operation_with_profile(
+                &table,
+                &profile,
+                &mut adapter,
+                ResourceOperationRequest::new(&handle.handle_id, "write"),
+            )
+            .expect_err("profile lacks write authority");
+
+        assert_eq!(adapter.calls, 0);
+        assert_eq!(error.denial.reason, ResourceDenialReason::CapabilityDenied);
+        assert_eq!(
+            error.denial.missing_capability.as_deref(),
+            Some("resource/write")
+        );
+    }
+
+    #[test]
+    fn profile_denies_delegation_without_delegate_capability() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let handle = registry
+            .open_handle(
+                &mut table,
+                ResourceOpenRequest::new("agent.alpha", "markodb:papers", vec!["read".into()]),
+            )
+            .expect("handle");
+        let profile = read_profile();
+
+        let error = registry
+            .delegate_handle_with_profile(
+                &mut table,
+                &profile,
+                ResourceDelegationRequest::new(
+                    &handle.handle_id,
+                    "actor.worker",
+                    vec!["read".into()],
+                ),
+            )
+            .expect_err("profile lacks delegate authority");
+
+        assert_eq!(error.denial.reason, ResourceDenialReason::CapabilityDenied);
+        assert_eq!(
+            error.denial.missing_capability.as_deref(),
+            Some("resource/delegate")
+        );
+    }
+
+    #[test]
+    fn profile_allows_revocation_with_revoke_capability() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let handle = registry
+            .open_handle(
+                &mut table,
+                ResourceOpenRequest::new("agent.alpha", "markodb:papers", vec!["read".into()]),
+            )
+            .expect("handle");
+        let profile = CapabilityProfile::new("security", "agent.security", "project.markodb")
+            .with_capability("resource/revoke");
+
+        let revoked = registry
+            .revoke_handle_with_profile(&mut table, &profile, &handle.handle_id)
+            .expect("profile revokes handle");
+
+        assert_eq!(revoked.revocation_state, HandleRevocationState::Revoked);
+        let error = registry
+            .check_operation(&table, &handle.handle_id, "read")
+            .expect_err("revoked handle");
+        assert_eq!(error.denial.reason, ResourceDenialReason::HandleRevoked);
+    }
+
     fn sample_registry() -> ResourceRegistry {
         let mut registry = ResourceRegistry::new();
         registry.register(
@@ -1574,6 +2051,10 @@ mod tests {
             .with_delegation_policy(HandleDelegationPolicy::NarrowOnly),
         );
         registry
+    }
+
+    fn read_profile() -> CapabilityProfile {
+        CapabilityProfile::read_only("readonly", "agent.alpha", "project.markodb")
     }
 
     #[derive(Debug, Clone)]

@@ -45,6 +45,8 @@ Implemented in this slice:
   mapping.
 - `specs/resource_adapters.feature` covering the executable agent-facing
   contract.
+- `execute_operation_with_profile` now extends the checked dispatch path with
+  process profile authority before adapter execution.
 
 Not implemented yet:
 
@@ -52,8 +54,8 @@ Not implemented yet:
 - Streaming registries and stream continuation ownership.
 - Blocking adapter isolation or scheduler handoff.
 - Actor-backed and device-backed adapter runners.
-- Capability-profile integration beyond existing handle grants.
-- Persistent audit sinks and transport/WASM token stores.
+- Profile composition, approvals, persistent audit sinks, and transport/WASM
+  token stores beyond the first operation-level profile checks.
 
 ## Adapter Call Order
 
@@ -65,12 +67,14 @@ Every adapter-backed operation follows this order:
 4. Verify resource type and trust zone still match the handle.
 5. Verify the resource operation schema exists.
 6. Verify the handle has the required grant.
-7. Verify the adapter type id and supported operation match the authorization.
-8. Build `ResourceAdapterRequest`.
-9. Call the adapter.
-10. Return structured outcome or map adapter failure into a resource diagnostic.
+7. Verify the active profile allows the holder, trust zone, and operation
+   capability when running under a profile.
+8. Verify the adapter type id and supported operation match the authorization.
+9. Build `ResourceAdapterRequest`.
+10. Call the adapter.
+11. Return structured outcome or map adapter failure into a resource diagnostic.
 
-The adapter must not be invoked if steps 1-7 fail.
+The adapter must not be invoked if steps 1-8 fail.
 
 ## AX Notes
 

@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod capability;
 pub mod diagnostic;
 pub mod draft;
 pub mod manifest;
@@ -16,6 +17,7 @@ pub use ast::{
     lower_datums, lower_datums_with_resolver, lower_source, lower_source_text,
     lower_source_text_with_resolver, lower_source_with_resolver,
 };
+pub use capability::CapabilityProfile;
 pub use diagnostic::{
     Diagnostic, DiagnosticCodeFrame, DiagnosticLabel, DiagnosticPhase, DiagnosticSeverity,
     DiagnosticSuggestion,

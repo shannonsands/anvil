@@ -97,6 +97,10 @@ matter to code structure.
 - Initial resource adapter execution contract exists in `anvil-core`: adapter
   trait, operation request/payload/outcome, execution modes, effect records,
   checked dispatch, and adapter-backed acceptance specs.
+- Initial capability-profile integration exists in `anvil-core`: runtime
+  profiles gate resource open, operation use, adapter execution, delegation,
+  and revocation, with `capability_denied` diagnostics and
+  `capability_profiles.feature` acceptance coverage.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 
@@ -110,8 +114,8 @@ matter to code structure.
   beyond the initial tracing-GC contract.
 - Async, streaming, blocking, actor-backed, and device-backed runners behind
   the initial resource adapter execution contract.
-- Capability-profile integration for resource opening, operation grants,
-  delegation, revocation, and audit sinks.
+- Capability profile composition, persistent policy storage, approval flows,
+  and audit sinks beyond the first resource operation checks.
 - Concrete runtime syntax for `defactor`, supervisors, atoms, channels,
   task groups, PubSub, hooks, watchers, event streams, and reactive forms.
 - Debugger and attach semantics: breakpoints, frame inspection, debug eval,

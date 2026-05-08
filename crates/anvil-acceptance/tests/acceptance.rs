@@ -6,17 +6,17 @@ use std::{
 };
 
 use anvil_core::{
-    AnvilManifest, AstDiagnostic, DraftOverlay, HandleDelegationPolicy, HandleEntry, HandleTable,
-    ManifestDiagnostic, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
-    PackageSnapshot, PackageSourceFile, ProjectDiagnostic, ReplInteraction, ReplResponse,
-    ReplSession, ResourceAdapter, ResourceAdapterFailure, ResourceAdapterOutcome,
-    ResourceAdapterRequest, ResourceAdapterResult, ResourceDelegationRequest, ResourceEffect,
-    ResourceEffectRecord, ResourceEntry, ResourceError, ResourceExecutionMode, ResourceOpenRequest,
-    ResourceOperationAuthorization, ResourceOperationOutcome, ResourceOperationRequest,
-    ResourceRegistry, SpannedAst, SyntaxDiagnostic, SyntaxObject, Value, Vm, VmBudget,
-    VmDiagnostic, VmOutput, compile_source, format_ast, format_datums, load_package_snapshot,
-    load_workspace_snapshot, lower_source, lower_source_with_resolver, parse_manifest,
-    read_repl_input, run_source, syntax_from_source,
+    AnvilManifest, AstDiagnostic, CapabilityProfile, DraftOverlay, HandleDelegationPolicy,
+    HandleEntry, HandleTable, ManifestDiagnostic, ModuleDiagnostic, ModuleResolution,
+    ModuleResolver, ModuleRootKind, PackageSnapshot, PackageSourceFile, ProjectDiagnostic,
+    ReplInteraction, ReplResponse, ReplSession, ResourceAdapter, ResourceAdapterFailure,
+    ResourceAdapterOutcome, ResourceAdapterRequest, ResourceAdapterResult,
+    ResourceDelegationRequest, ResourceEffect, ResourceEffectRecord, ResourceEntry, ResourceError,
+    ResourceExecutionMode, ResourceOpenRequest, ResourceOperationAuthorization,
+    ResourceOperationOutcome, ResourceOperationRequest, ResourceRegistry, SpannedAst,
+    SyntaxDiagnostic, SyntaxObject, Value, Vm, VmBudget, VmDiagnostic, VmOutput, compile_source,
+    format_ast, format_datums, load_package_snapshot, load_workspace_snapshot, lower_source,
+    lower_source_with_resolver, parse_manifest, read_repl_input, run_source, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -53,6 +53,7 @@ struct AnvilWorld {
     resource_adapter: Option<RecordingResourceAdapter>,
     resource_operation_outcome: Option<ResourceOperationOutcome>,
     resource_error: Option<Box<ResourceError>>,
+    capability_profile: Option<CapabilityProfile>,
 }
 
 impl Drop for AnvilWorld {
@@ -86,6 +87,7 @@ async fn fresh_resource_registry(world: &mut AnvilWorld) {
     world.resource_adapter = None;
     world.resource_operation_outcome = None;
     world.resource_error = None;
+    world.capability_profile = None;
 }
 
 #[given(
@@ -104,6 +106,22 @@ async fn resource_exists_with_operations(
         resource.add_operation(operation.clone(), operation);
     }
     world.resource_registry.register(resource);
+}
+
+#[given(
+    expr = "capability profile {string} for principal {string} in trust zone {string} with capabilities {string}"
+)]
+async fn capability_profile_for_principal(
+    world: &mut AnvilWorld,
+    profile_id: String,
+    principal: String,
+    trust_zone: String,
+    capabilities: String,
+) {
+    world.capability_profile = Some(
+        CapabilityProfile::new(profile_id, principal, trust_zone)
+            .with_capabilities(split_csv(&capabilities)),
+    );
 }
 
 #[given(expr = "resource adapter {string} handles type {string} with operations {string}")]
@@ -253,6 +271,35 @@ async fn holder_opens_resource(
     }
 }
 
+#[when(
+    expr = "holder {string} opens resource {string} under the capability profile with grants {string}"
+)]
+async fn holder_opens_resource_under_capability_profile(
+    world: &mut AnvilWorld,
+    holder: String,
+    resource_id: String,
+    grants: String,
+) {
+    let profile = world
+        .capability_profile
+        .clone()
+        .expect("capability profile");
+    match world.resource_registry.open_handle_with_profile(
+        &mut world.resource_handle_table,
+        &profile,
+        ResourceOpenRequest::new(holder, resource_id, split_csv(&grants)),
+    ) {
+        Ok(handle) => {
+            world.resource_handle = Some(handle);
+            world.resource_error = None;
+        }
+        Err(error) => {
+            world.resource_handle = None;
+            world.resource_error = Some(error);
+        }
+    }
+}
+
 #[when(expr = "the holder uses the resource handle for operation {string}")]
 async fn holder_uses_resource_handle(world: &mut AnvilWorld, operation: String) {
     let handle_id = world
@@ -310,6 +357,44 @@ async fn holder_executes_resource_operation_through_adapter(
     }
 }
 
+#[when(
+    expr = "the holder executes resource operation {string} through the adapter under the capability profile returning {string}"
+)]
+async fn holder_executes_resource_operation_through_adapter_under_capability_profile(
+    world: &mut AnvilWorld,
+    operation: String,
+    value: String,
+) {
+    let profile = world
+        .capability_profile
+        .clone()
+        .expect("capability profile");
+    let handle_id = world
+        .resource_handle
+        .as_ref()
+        .expect("resource handle")
+        .handle_id
+        .clone();
+    let adapter = world.resource_adapter.as_mut().expect("resource adapter");
+    adapter.value = Value::String(value);
+
+    match world.resource_registry.execute_operation_with_profile(
+        &world.resource_handle_table,
+        &profile,
+        adapter,
+        ResourceOperationRequest::new(handle_id, operation),
+    ) {
+        Ok(outcome) => {
+            world.resource_operation_outcome = Some(outcome);
+            world.resource_error = None;
+        }
+        Err(error) => {
+            world.resource_operation_outcome = None;
+            world.resource_error = Some(error);
+        }
+    }
+}
+
 #[when(expr = "the holder delegates the resource handle to {string} with grants {string}")]
 async fn holder_delegates_resource_handle(
     world: &mut AnvilWorld,
@@ -337,6 +422,40 @@ async fn holder_delegates_resource_handle(
     }
 }
 
+#[when(
+    expr = "the holder delegates the resource handle to {string} under the capability profile with grants {string}"
+)]
+async fn holder_delegates_resource_handle_under_capability_profile(
+    world: &mut AnvilWorld,
+    delegate_to: String,
+    grants: String,
+) {
+    let profile = world
+        .capability_profile
+        .clone()
+        .expect("capability profile");
+    let handle_id = world
+        .resource_handle
+        .as_ref()
+        .expect("resource handle")
+        .handle_id
+        .clone();
+    match world.resource_registry.delegate_handle_with_profile(
+        &mut world.resource_handle_table,
+        &profile,
+        ResourceDelegationRequest::new(handle_id, delegate_to, split_csv(&grants)),
+    ) {
+        Ok(handle) => {
+            world.delegated_resource_handle = Some(handle);
+            world.resource_error = None;
+        }
+        Err(error) => {
+            world.delegated_resource_handle = None;
+            world.resource_error = Some(error);
+        }
+    }
+}
+
 #[when("the supervisor revokes the resource handle")]
 async fn supervisor_revokes_resource_handle(world: &mut AnvilWorld) {
     let handle_id = world
@@ -347,6 +466,34 @@ async fn supervisor_revokes_resource_handle(world: &mut AnvilWorld) {
         .clone();
 
     match world.resource_handle_table.revoke(&handle_id) {
+        Ok(handle) => {
+            world.resource_handle = Some(handle);
+            world.resource_error = None;
+        }
+        Err(error) => {
+            world.resource_error = Some(error);
+        }
+    }
+}
+
+#[when("the capability profile revokes the resource handle")]
+async fn capability_profile_revokes_resource_handle(world: &mut AnvilWorld) {
+    let profile = world
+        .capability_profile
+        .clone()
+        .expect("capability profile");
+    let handle_id = world
+        .resource_handle
+        .as_ref()
+        .expect("resource handle")
+        .handle_id
+        .clone();
+
+    match world.resource_registry.revoke_handle_with_profile(
+        &mut world.resource_handle_table,
+        &profile,
+        &handle_id,
+    ) {
         Ok(handle) => {
             world.resource_handle = Some(handle);
             world.resource_error = None;
@@ -1110,6 +1257,16 @@ async fn resource_denial_reason_is(world: &mut AnvilWorld, expected: String) {
     assert_eq!(reason, expected);
 }
 
+#[then(expr = "the resource denial missing capability is {string}")]
+async fn resource_denial_missing_capability_is(world: &mut AnvilWorld, expected: String) {
+    let error = resource_error(world);
+
+    assert_eq!(
+        error.denial.missing_capability.as_deref(),
+        Some(expected.as_str())
+    );
+}
+
 #[then(expr = "the resource denial phase is {string}")]
 async fn resource_denial_phase_is(world: &mut AnvilWorld, expected: String) {
     let error = resource_error(world);
@@ -1243,23 +1400,14 @@ fn trim_docstring(value: &str) -> &str {
 fn split_csv(value: &str) -> Vec<String> {
     value
         .split(',')
+        .map(str::trim)
         .filter(|part| !part.is_empty())
         .map(ToString::to_string)
         .collect()
 }
 
 fn resource_effect_from_operation(operation: &str) -> ResourceEffect {
-    match operation {
-        "read" => ResourceEffect::Read,
-        "write" => ResourceEffect::Write,
-        "stream" => ResourceEffect::Stream,
-        "inspect" => ResourceEffect::Inspect,
-        "delegate" => ResourceEffect::Delegate,
-        "close" => ResourceEffect::Close,
-        "revoke" => ResourceEffect::Revoke,
-        "open" | "import" => ResourceEffect::Import,
-        _ => ResourceEffect::Call,
-    }
+    ResourceEffect::from_operation(operation)
 }
 
 fn create_temp_package_root() -> PathBuf {

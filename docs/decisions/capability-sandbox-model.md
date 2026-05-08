@@ -22,8 +22,11 @@ Implementation-facing decision:
 - Native Rust host adapters are trusted runtime code. Keep them small, typed,
   capability-aware, and audited.
 
-Open implementation dependency: the value/heap/GC direction is drafted in
-`docs/decisions/value-heap-gc.md`; resource handles and checked adapter
-dispatch are now drafted in `docs/decisions/resource-handles.md` and
-`docs/decisions/resource-adapter-execution.md`. The next dependency is concrete
-capability-profile integration for open/use/delegate/revoke checks.
+Implementation status: the value/heap/GC direction is drafted in
+`docs/decisions/value-heap-gc.md`; resource handles, checked adapter dispatch,
+and profile-mediated resource checks are now drafted in
+`docs/decisions/resource-handles.md`,
+`docs/decisions/resource-adapter-execution.md`, and
+`docs/decisions/capability-profile-integration.md`. The remaining capability
+work is profile composition, approvals, audit sinks, transport/WASM facade
+profiles, and persistent policy storage.

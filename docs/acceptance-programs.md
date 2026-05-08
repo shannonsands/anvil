@@ -73,6 +73,9 @@ The first executable acceptance harness is intentionally tiny but real:
 - `resource_adapters.feature` covers the first adapter-backed execution
   contract: checked dispatch after authorization, denial before adapter calls,
   structured adapter outcomes, and adapter failure diagnostics.
+- `capability_profiles.feature` covers process-profile mediation for resource
+  open, adapter execution, delegation, and revocation, including
+  `capability_denied` diagnostics and zero adapter calls on denied operations.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as

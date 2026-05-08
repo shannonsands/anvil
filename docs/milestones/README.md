@@ -104,3 +104,7 @@ Current implementation slice:
   records, and adapter failure mapping.
 - `resource_adapters.feature` covers authorized adapter execution, denial
   before adapter calls, and adapter failure diagnostics.
+- `anvil-core` now has `CapabilityProfile` and profile-aware resource checks
+  for open, use, adapter execution, delegation, and revocation.
+- `capability_profiles.feature` covers `capability_denied` diagnostics,
+  missing-capability reporting, revocation, and denial before adapter calls.

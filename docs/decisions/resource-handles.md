@@ -46,12 +46,16 @@ Implemented in this slice:
   widening, and revocation.
 - `specs/resource_adapters.feature` covering checked adapter execution,
   denial before adapter calls, and adapter failure diagnostics.
+- `CapabilityProfile` and profile-aware resource registry methods for open,
+  use, adapter execution, delegation, and revocation.
+- `specs/capability_profiles.feature` covering profile-mediated resource
+  checks and denial-before-adapter-call behavior.
 
 Not implemented yet:
 
 - Real host/resource adapters behind the trait.
 - Async/blocking/streaming resource runners.
-- Capability-profile integration beyond handle grants.
+- Capability profile composition, approvals, and persistent policy storage.
 - Transport, TypeScript, or WASM facade token stores.
 - Persistent audit sinks.
 
