@@ -1912,6 +1912,213 @@ mod tests {
     }
 
     #[test]
+    fn maps_resource_effects_to_capability_names() {
+        let cases = [
+            ("open", ResourceEffect::Import, "resource/open"),
+            ("read", ResourceEffect::Read, "resource/read"),
+            ("write", ResourceEffect::Write, "resource/write"),
+            ("stream", ResourceEffect::Stream, "resource/stream"),
+            ("inspect", ResourceEffect::Inspect, "resource/inspect"),
+            ("delegate", ResourceEffect::Delegate, "resource/delegate"),
+            ("close", ResourceEffect::Close, "resource/close"),
+            ("revoke", ResourceEffect::Revoke, "resource/revoke"),
+            ("ask", ResourceEffect::Call, "resource/call"),
+        ];
+
+        for (operation, effect, capability) in cases {
+            assert_eq!(ResourceEffect::from_operation(operation), effect);
+            assert_eq!(effect.capability_name(), capability);
+        }
+    }
+
+    #[test]
+    fn opens_explicit_handle_ids_and_exposes_registry_lookup() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+
+        let handle = registry
+            .open_handle(
+                &mut table,
+                ResourceOpenRequest::new("agent.alpha", "markodb:papers", vec!["read".into()])
+                    .with_handle_id("papers-read"),
+            )
+            .expect("handle");
+
+        assert_eq!(handle.handle_id, "papers-read");
+        assert_eq!(
+            registry
+                .get("markodb:papers")
+                .map(|entry| entry.type_id.as_str()),
+            Some("markodb.collection")
+        );
+        assert_eq!(table.handles().count(), 1);
+    }
+
+    #[test]
+    fn reports_missing_resources_handles_and_close_targets() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+
+        let missing_resource = registry
+            .open_handle(
+                &mut table,
+                ResourceOpenRequest::new("agent.alpha", "markodb:missing", vec!["read".into()]),
+            )
+            .expect_err("missing resource");
+        assert_eq!(
+            missing_resource.denial.reason,
+            ResourceDenialReason::ResourceUnavailable
+        );
+
+        let missing_handle = registry
+            .check_operation(&table, "handle-missing", "read")
+            .expect_err("missing handle");
+        assert_eq!(
+            missing_handle.denial.reason,
+            ResourceDenialReason::HandleMissing
+        );
+
+        let close_missing = table.close("handle-missing").expect_err("missing handle");
+        assert_eq!(
+            close_missing.denial.reason,
+            ResourceDenialReason::HandleMissing
+        );
+    }
+
+    #[test]
+    fn non_active_handle_states_block_operations() {
+        let cases = [
+            (
+                HandleRevocationState::Closed,
+                ResourceDenialReason::HandleClosed,
+            ),
+            (
+                HandleRevocationState::Expired,
+                ResourceDenialReason::HandleExpired,
+            ),
+            (
+                HandleRevocationState::Closing,
+                ResourceDenialReason::ResourceUnavailable,
+            ),
+            (
+                HandleRevocationState::Poisoned,
+                ResourceDenialReason::ResourceUnavailable,
+            ),
+        ];
+
+        for (state, reason) in cases {
+            let registry = sample_registry();
+            let mut table = HandleTable::new();
+            let handle = open_sample_handle(&registry, &mut table, &["read"]);
+            table
+                .entries
+                .get_mut(&handle.handle_id)
+                .expect("handle")
+                .revocation_state = state;
+
+            let error = registry
+                .check_operation(&table, &handle.handle_id, "read")
+                .expect_err("blocked handle");
+
+            assert_eq!(error.denial.reason, reason);
+        }
+    }
+
+    #[test]
+    fn detects_tampered_handle_type_and_trust_zone() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let handle = open_sample_handle(&registry, &mut table, &["read"]);
+        table
+            .entries
+            .get_mut(&handle.handle_id)
+            .expect("handle")
+            .type_id = "other.collection".to_string();
+
+        let wrong_type = registry
+            .check_operation(&table, &handle.handle_id, "read")
+            .expect_err("wrong type");
+        assert_eq!(
+            wrong_type.denial.reason,
+            ResourceDenialReason::WrongResourceType
+        );
+
+        let mut table = HandleTable::new();
+        let handle = open_sample_handle(&registry, &mut table, &["read"]);
+        table
+            .entries
+            .get_mut(&handle.handle_id)
+            .expect("handle")
+            .trust_zone = "project.other".to_string();
+
+        let wrong_zone = registry
+            .check_operation(&table, &handle.handle_id, "read")
+            .expect_err("wrong trust zone");
+        assert_eq!(
+            wrong_zone.denial.reason,
+            ResourceDenialReason::WrongTrustZone
+        );
+    }
+
+    #[test]
+    fn denies_unsupported_resource_operations_and_adapter_operations() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let handle = open_sample_handle(&registry, &mut table, &["read"]);
+
+        let unsupported_resource_operation = registry
+            .check_operation(&table, &handle.handle_id, "stream")
+            .expect_err("unsupported resource operation");
+        assert_eq!(
+            unsupported_resource_operation.denial.reason,
+            ResourceDenialReason::OperationUnsupported
+        );
+
+        let mut adapter = TestAdapter::new("markodb.adapter", "markodb.collection", ["inspect"]);
+        let unsupported_adapter_operation = registry
+            .execute_operation(
+                &table,
+                &mut adapter,
+                ResourceOperationRequest::new(&handle.handle_id, "read"),
+            )
+            .expect_err("unsupported adapter operation");
+
+        assert_eq!(adapter.calls, 0);
+        assert_eq!(
+            unsupported_adapter_operation.denial.reason,
+            ResourceDenialReason::OperationUnsupported
+        );
+    }
+
+    #[test]
+    fn resource_outcomes_preserve_continuations_effects_and_options() {
+        let pending = ResourceAdapterOutcome::pending("job-1");
+        assert_eq!(pending.status, ResourceAdapterStatus::Pending);
+        assert_eq!(pending.continuation.as_deref(), Some("job-1"));
+
+        let streaming = ResourceAdapterOutcome::streaming("stream-1");
+        assert_eq!(streaming.status, ResourceAdapterStatus::Streaming);
+        assert_eq!(streaming.continuation.as_deref(), Some("stream-1"));
+
+        let cancelled = ResourceAdapterOutcome::cancelled();
+        assert_eq!(cancelled.status, ResourceAdapterStatus::Cancelled);
+        assert_eq!(cancelled.value, Value::Nil);
+
+        let effect =
+            ResourceEffectRecord::new(ResourceEffect::Write, "markodb:papers", "write").committed();
+        let completed = ResourceAdapterOutcome::completed(Value::Bool(true)).with_effect(effect);
+        assert_eq!(completed.effects[0].effect, ResourceEffect::Write);
+        assert!(completed.effects[0].committed);
+
+        let request = ResourceOperationRequest::new("handle-1", "read")
+            .with_option("limit", Value::Integer(3));
+        assert_eq!(
+            request.payload.options.get("limit"),
+            Some(&Value::Integer(3))
+        );
+    }
+
+    #[test]
     fn profile_allows_opening_selected_grants() {
         let registry = sample_registry();
         let mut table = HandleTable::new();
@@ -2036,6 +2243,165 @@ mod tests {
         assert_eq!(error.denial.reason, ResourceDenialReason::HandleRevoked);
     }
 
+    #[test]
+    fn profile_denies_wrong_principal_and_wrong_trust_zone() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let profile = read_profile();
+
+        let wrong_principal = registry
+            .open_handle_with_profile(
+                &mut table,
+                &profile,
+                ResourceOpenRequest::new("agent.beta", "markodb:papers", vec!["read".into()]),
+            )
+            .expect_err("wrong principal");
+
+        assert_eq!(
+            wrong_principal.denial.reason,
+            ResourceDenialReason::CapabilityDenied
+        );
+        assert_eq!(
+            wrong_principal.denial.missing_capability.as_deref(),
+            Some("profile/principal")
+        );
+        assert!(table.handles().next().is_none());
+
+        let mut registry = ResourceRegistry::new();
+        registry.register(
+            ResourceEntry::new(
+                "secrets:vault",
+                "secret.store",
+                "runtime",
+                "project.secrets",
+            )
+            .with_operation("read", "read"),
+        );
+        let wrong_zone = registry
+            .open_handle_with_profile(
+                &mut table,
+                &profile,
+                ResourceOpenRequest::new("agent.alpha", "secrets:vault", vec!["read".into()]),
+            )
+            .expect_err("wrong trust zone");
+
+        assert_eq!(
+            wrong_zone.denial.reason,
+            ResourceDenialReason::WrongTrustZone
+        );
+        assert_eq!(
+            wrong_zone.denial.trust_zone.as_deref(),
+            Some("project.secrets")
+        );
+    }
+
+    #[test]
+    fn profile_denial_overrides_resource_grants() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let profile = CapabilityProfile::agent_dev("dev", "agent.alpha", "project.markodb")
+            .with_denied_capability("resource/write");
+
+        let error = registry
+            .open_handle_with_profile(
+                &mut table,
+                &profile,
+                ResourceOpenRequest::new("agent.alpha", "markodb:papers", vec!["write".into()]),
+            )
+            .expect_err("explicit profile denial");
+
+        assert_eq!(error.denial.reason, ResourceDenialReason::CapabilityDenied);
+        assert_eq!(
+            error.denial.missing_capability.as_deref(),
+            Some("resource/write")
+        );
+        assert!(table.handles().next().is_none());
+    }
+
+    #[test]
+    fn profile_accepts_domain_specific_resource_capabilities() {
+        let registry = qbbn_registry();
+        let mut table = HandleTable::new();
+        let profile = CapabilityProfile::new("qbbn", "agent.alpha", "project.markodb")
+            .with_capabilities(["resource/open", "qbbn/ask"]);
+        let handle = registry
+            .open_handle_with_profile(
+                &mut table,
+                &profile,
+                ResourceOpenRequest::new("agent.alpha", "markodb:qbbn", vec!["qbbn/ask".into()]),
+            )
+            .expect("domain-specific handle");
+        let mut adapter = TestAdapter::new("qbbn.adapter", "markodb.qbbn", ["ask"])
+            .with_value(Value::Keyword("entailed".to_string()));
+
+        let outcome = registry
+            .execute_operation_with_profile(
+                &table,
+                &profile,
+                &mut adapter,
+                ResourceOperationRequest::new(&handle.handle_id, "ask"),
+            )
+            .expect("domain-specific operation");
+
+        assert_eq!(outcome.authorization.capability, "qbbn/ask");
+        assert_eq!(adapter.calls, 1);
+    }
+
+    #[test]
+    fn profile_denies_delegated_grants_it_cannot_hold() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let handle = open_sample_handle(&registry, &mut table, &["read", "write"]);
+        let profile = CapabilityProfile::new("delegator", "agent.alpha", "project.markodb")
+            .with_capabilities(["resource/delegate", "resource/read"]);
+
+        let error = registry
+            .delegate_handle_with_profile(
+                &mut table,
+                &profile,
+                ResourceDelegationRequest::new(
+                    &handle.handle_id,
+                    "actor.worker",
+                    vec!["read".into(), "write".into()],
+                )
+                .with_handle_id("delegated"),
+            )
+            .expect_err("profile lacks delegated grant");
+
+        assert_eq!(error.denial.reason, ResourceDenialReason::CapabilityDenied);
+        assert_eq!(
+            error.denial.missing_capability.as_deref(),
+            Some("resource/write")
+        );
+        assert!(table.get("delegated").is_none());
+    }
+
+    #[test]
+    fn profile_denies_revocation_without_revoke_capability() {
+        let registry = sample_registry();
+        let mut table = HandleTable::new();
+        let handle = open_sample_handle(&registry, &mut table, &["read"]);
+        let profile = CapabilityProfile::new("readonly", "agent.alpha", "project.markodb")
+            .with_capability("resource/read");
+
+        let error = registry
+            .revoke_handle_with_profile(&mut table, &profile, &handle.handle_id)
+            .expect_err("profile lacks revoke authority");
+
+        assert_eq!(error.denial.reason, ResourceDenialReason::CapabilityDenied);
+        assert_eq!(
+            error.denial.missing_capability.as_deref(),
+            Some("resource/revoke")
+        );
+        assert_eq!(
+            table
+                .get(&handle.handle_id)
+                .expect("handle")
+                .revocation_state,
+            HandleRevocationState::Active
+        );
+    }
+
     fn sample_registry() -> ResourceRegistry {
         let mut registry = ResourceRegistry::new();
         registry.register(
@@ -2051,6 +2417,32 @@ mod tests {
             .with_delegation_policy(HandleDelegationPolicy::NarrowOnly),
         );
         registry
+    }
+
+    fn qbbn_registry() -> ResourceRegistry {
+        let mut registry = ResourceRegistry::new();
+        registry.register(
+            ResourceEntry::new("markodb:qbbn", "markodb.qbbn", "runtime", "project.markodb")
+                .with_operation("ask", "qbbn/ask"),
+        );
+        registry
+    }
+
+    fn open_sample_handle(
+        registry: &ResourceRegistry,
+        table: &mut HandleTable,
+        grants: &[&str],
+    ) -> HandleEntry {
+        registry
+            .open_handle(
+                table,
+                ResourceOpenRequest::new(
+                    "agent.alpha",
+                    "markodb:papers",
+                    grants.iter().map(|grant| (*grant).to_string()).collect(),
+                ),
+            )
+            .expect("handle")
     }
 
     fn read_profile() -> CapabilityProfile {

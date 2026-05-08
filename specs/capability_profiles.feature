@@ -29,6 +29,34 @@ Feature: Capability profiles
     And the resource denial missing capability is "resource/write"
     And the resource adapter call count is 0
 
+  Scenario: Profile denies opening for the wrong principal
+    Given a fresh resource registry
+    And resource "markodb:papers" of type "markodb.collection" exists in trust zone "project.markodb" with operations "read,write,inspect"
+    And capability profile "readonly" for principal "agent.alpha" in trust zone "project.markodb" with capabilities "resource/open,resource/read"
+    When holder "agent.beta" opens resource "markodb:papers" under the capability profile with grants "read"
+    Then the resource denial reason is "capability_denied"
+    And the resource denial missing capability is "profile/principal"
+    And the resource audit decision is "denied"
+
+  Scenario: Profile denies opening outside its trust zone
+    Given a fresh resource registry
+    And resource "secrets:vault" of type "secret.store" exists in trust zone "project.secrets" with operations "read"
+    And capability profile "readonly" for principal "agent.alpha" in trust zone "project.markodb" with capabilities "resource/open,resource/read"
+    When holder "agent.alpha" opens resource "secrets:vault" under the capability profile with grants "read"
+    Then the resource denial reason is "wrong_trust_zone"
+    And the resource audit decision is "denied"
+
+  Scenario: Profile allows domain-specific resource capabilities
+    Given a fresh resource registry
+    And resource "markodb:qbbn" of type "markodb.qbbn" exists in trust zone "project.markodb" with operation "ask" requiring capability "qbbn/ask"
+    And resource adapter "qbbn.adapter" handles type "markodb.qbbn" with operations "ask"
+    And capability profile "qbbn" for principal "agent.alpha" in trust zone "project.markodb" with capabilities "resource/open,qbbn/ask"
+    When holder "agent.alpha" opens resource "markodb:qbbn" under the capability profile with grants "qbbn/ask"
+    And the holder executes resource operation "ask" through the adapter under the capability profile returning "entailed"
+    Then the resource adapter call count is 1
+    And the resource adapter string value is "entailed"
+    And the resource operation audit decision is "allowed"
+
   Scenario: Profile denies delegation without delegate authority
     Given a fresh resource registry
     And resource "markodb:papers" of type "markodb.collection" exists in trust zone "project.markodb" with operations "read,write,inspect"

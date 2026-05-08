@@ -17,6 +17,9 @@ Implementation-facing decision:
 - Baseline increases require explicit human approval.
 - The repo currently carries no approved CRAP baseline. Coverage or structure
   should improve before any over-threshold function is accepted.
+- The project target is 90% line coverage for critical runtime crates. The
+  current enforced push gate is 80% and should ratchet upward only after
+  meaningful tests or simplifying refactors land.
 - Quality gates should eventually cover formatting, linting, tests, coverage,
   CRAP, mutation, Gherkin/spec linting, architecture boundaries, dependencies,
   performance, duplication, docs, examples, and acceptance evals.
@@ -28,7 +31,7 @@ Implemented concrete gates:
 - `make check-fast`: formatting, Clippy with warnings denied, Gherkin lint,
   Cucumber acceptance specs, workspace tests, and `git diff --check`.
 - `make check-push`: `check-fast`, tarpaulin coverage with a default
-  `ANVIL_COVERAGE_FAIL_UNDER=60`, and coverage-backed CRAP with
+  `ANVIL_COVERAGE_FAIL_UNDER=80`, and coverage-backed CRAP with
   `ANVIL_CRAP_THRESHOLD=30`.
 - `make check-deep`: `check-push` plus `cargo-mutants`.
 - `make install-hooks`: configures `.githooks`; pre-commit runs `check-fast`

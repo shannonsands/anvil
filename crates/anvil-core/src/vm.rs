@@ -708,9 +708,47 @@ mod tests {
         run_source(source).expect("VM output").value
     }
 
+    fn bytecode(instructions: Vec<Instruction>, constants: Vec<Value>) -> BytecodeProgram {
+        bytecode_with_registers(instructions, constants, 1)
+    }
+
+    fn bytecode_with_registers(
+        instructions: Vec<Instruction>,
+        constants: Vec<Value>,
+        register_count: usize,
+    ) -> BytecodeProgram {
+        let source = SourceText::new("malformed-bytecode", "broken");
+        BytecodeProgram {
+            version: BYTECODE_VERSION,
+            source_id: source.id().to_string(),
+            register_count,
+            constants,
+            instructions: instructions
+                .into_iter()
+                .map(|instruction| BytecodeInstruction {
+                    instruction,
+                    span: SourceSpan::point(SourceLocation::start()),
+                })
+                .collect(),
+            source,
+        }
+    }
+
+    fn runtime_code(program: BytecodeProgram) -> String {
+        Vm::with_budget(VmBudget::unlimited())
+            .run(&program)
+            .expect_err("runtime diagnostic")
+            .code
+            .to_string()
+    }
+
     #[test]
     fn runs_literals_and_top_level_sequences() {
+        assert_eq!(run_value("nil"), Value::Nil);
+        assert_eq!(run_value("false"), Value::Bool(false));
         assert_eq!(run_value("42"), Value::Integer(42));
+        assert_eq!(run_value("1.5"), Value::Float64(1.5));
+        assert_eq!(run_value("\"agent\""), Value::String("agent".into()));
         assert_eq!(run_value("1 2"), Value::Integer(2));
         assert_eq!(run_value(""), Value::Nil);
     }
@@ -751,6 +789,27 @@ mod tests {
     }
 
     #[test]
+    fn displays_all_value_forms_with_escaping() {
+        let value = Value::Vector(vec![
+            Value::Nil,
+            Value::Bool(true),
+            Value::Integer(7),
+            Value::Float64(2.5),
+            Value::String("a\\b\"c\n".into()),
+            Value::Keyword("ready".into()),
+            Value::Map(vec![ValueMapEntry {
+                key: Value::Keyword("nested".into()),
+                value: Value::Bool(false),
+            }]),
+        ]);
+
+        assert_eq!(
+            value.to_string(),
+            "[nil true 7 2.5 \"a\\\\b\\\"c\\n\" :ready {:nested false}]"
+        );
+    }
+
+    #[test]
     fn records_source_spans_on_bytecode_instructions() {
         let program = compile_source("(if false 1 2)").expect("bytecode");
 
@@ -771,6 +830,15 @@ mod tests {
     }
 
     #[test]
+    fn reports_unbound_symbols_as_compile_diagnostics() {
+        let diagnostic = compile_source("answer").expect_err("compile diagnostic");
+
+        assert_eq!(diagnostic.code, "ANVIL_COMPILE_UNBOUND_SYMBOL");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Compile);
+        assert_eq!(diagnostic.actual.as_deref(), Some("symbol answer"));
+    }
+
+    #[test]
     fn reports_fuel_exhaustion_as_runtime_diagnostic() {
         let program = compile_source("42").expect("bytecode");
         let diagnostic = Vm::with_budget(VmBudget::with_instruction_fuel(0))
@@ -780,5 +848,111 @@ mod tests {
         assert_eq!(diagnostic.code, "ANVIL_RUNTIME_FUEL_EXHAUSTED");
         assert_eq!(diagnostic.phase, DiagnosticPhase::Runtime);
         assert_eq!(diagnostic.primary_span.start.column, 1);
+    }
+
+    #[test]
+    fn unlimited_budget_runs_without_consuming_fuel() {
+        let program = compile_source("(do 1 2)").expect("bytecode");
+        let output = Vm::with_budget(VmBudget::unlimited())
+            .run(&program)
+            .expect("VM output");
+
+        assert_eq!(output.value, Value::Integer(2));
+        assert!(output.instructions_executed > 0);
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_pc_out_of_bounds() {
+        assert_eq!(
+            runtime_code(bytecode(Vec::new(), Vec::new())),
+            "ANVIL_RUNTIME_PC_OUT_OF_BOUNDS"
+        );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_constant_out_of_bounds() {
+        assert_eq!(
+            runtime_code(bytecode(
+                vec![Instruction::LoadConstant {
+                    dst: 0,
+                    constant: 9,
+                }],
+                Vec::new(),
+            )),
+            "ANVIL_RUNTIME_CONSTANT_OUT_OF_BOUNDS"
+        );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_register_read_out_of_bounds() {
+        assert_eq!(
+            runtime_code(bytecode(vec![Instruction::Return { src: 9 }], Vec::new(),)),
+            "ANVIL_RUNTIME_REGISTER_OUT_OF_BOUNDS"
+        );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_register_write_out_of_bounds() {
+        assert_eq!(
+            runtime_code(bytecode(
+                vec![Instruction::LoadConstant {
+                    dst: 9,
+                    constant: 0,
+                }],
+                vec![Value::Nil],
+            )),
+            "ANVIL_RUNTIME_REGISTER_OUT_OF_BOUNDS"
+        );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_bad_jump_targets() {
+        assert_eq!(
+            runtime_code(bytecode(vec![Instruction::Jump { target: 99 }], Vec::new(),)),
+            "ANVIL_RUNTIME_BAD_JUMP_TARGET"
+        );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_vector_register_errors() {
+        assert_eq!(
+            runtime_code(bytecode(
+                vec![Instruction::MakeVector {
+                    dst: 0,
+                    items: vec![9],
+                }],
+                Vec::new(),
+            )),
+            "ANVIL_RUNTIME_REGISTER_OUT_OF_BOUNDS"
+        );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_map_register_errors() {
+        assert_eq!(
+            runtime_code(bytecode_with_registers(
+                vec![Instruction::MakeMap {
+                    dst: 0,
+                    entries: vec![MapRegisterEntry { key: 0, value: 9 }],
+                }],
+                Vec::new(),
+                1,
+            )),
+            "ANVIL_RUNTIME_REGISTER_OUT_OF_BOUNDS"
+        );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_jump_condition_register_errors() {
+        assert_eq!(
+            runtime_code(bytecode(
+                vec![Instruction::JumpIfFalse {
+                    condition: 9,
+                    target: 0,
+                }],
+                Vec::new(),
+            )),
+            "ANVIL_RUNTIME_REGISTER_OUT_OF_BOUNDS"
+        );
     }
 }

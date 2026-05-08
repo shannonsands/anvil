@@ -40,8 +40,9 @@ matter to code structure.
   separate, Obsidian drives early requirements, repo-local docs grow with
   implementation, and Snapdragon-style fast/push/deep quality gates are part of
   the engineering model. The repo now has `.githooks`, `scripts/quality/`, and
-  `make check-fast`, `make check-push`, and `make check-deep`; CRAP currently
-  has no approved baseline.
+  `make check-fast`, `make check-push`, and `make check-deep`; coverage is
+  enforced at 80% with 90% as the target for critical runtime crates, and CRAP
+  currently has no approved baseline.
 - Executable acceptance specs use Gherkin under `specs/` and a Rust-native
   Cucumber harness in the `anvil-acceptance` crate.
 - Implementation starts REPL-first: the first REPL is reader-backed and
@@ -100,7 +101,8 @@ matter to code structure.
 - Initial capability-profile integration exists in `anvil-core`: runtime
   profiles gate resource open, operation use, adapter execution, delegation,
   and revocation, with `capability_denied` diagnostics and
-  `capability_profiles.feature` acceptance coverage.
+  `capability_profiles.feature` acceptance coverage for principal, trust-zone,
+  generic, and domain-specific capability behavior.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 

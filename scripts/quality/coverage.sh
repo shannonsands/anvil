@@ -14,7 +14,7 @@ if ! cargo tarpaulin --version >/dev/null 2>&1; then
 fi
 
 REPORT_DIR="${ANVIL_COVERAGE_DIR:-target/quality/tarpaulin}"
-FAIL_UNDER="${ANVIL_COVERAGE_FAIL_UNDER:-60}"
+FAIL_UNDER="${ANVIL_COVERAGE_FAIL_UNDER:-80}"
 TIMEOUT="${ANVIL_TARPAULIN_TIMEOUT:-120}"
 
 mkdir -p "$REPORT_DIR"

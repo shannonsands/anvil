@@ -115,8 +115,10 @@ pre-push runs `scripts/quality/push.sh`. Set `ANVIL_DEEP_ON_PUSH=1` to run
 mutation testing on push.
 
 `check-push` generates tarpaulin coverage and runs CRAP with threshold 30. The
-repo currently has no approved CRAP baseline. If CRAP fails, add meaningful
-coverage or refactor the function before considering any baseline.
+default enforced coverage floor is 80%, with 90% as the target for critical
+runtime crates. The repo currently has no approved CRAP baseline. If coverage
+or CRAP fails, add meaningful tests or refactor the function before considering
+any baseline.
 
 `check-deep` runs `cargo-mutants`. Mutation misses are test-quality feedback;
 add assertions that kill the mutant, or simplify/exclude only when the code is

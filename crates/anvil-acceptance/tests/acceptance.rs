@@ -109,6 +109,23 @@ async fn resource_exists_with_operations(
 }
 
 #[given(
+    expr = "resource {string} of type {string} exists in trust zone {string} with operation {string} requiring capability {string}"
+)]
+async fn resource_exists_with_operation_and_capability(
+    world: &mut AnvilWorld,
+    resource_id: String,
+    type_id: String,
+    trust_zone: String,
+    operation: String,
+    capability: String,
+) {
+    let resource = ResourceEntry::new(resource_id, type_id, "runtime", trust_zone)
+        .with_operation(operation, capability)
+        .with_delegation_policy(HandleDelegationPolicy::NarrowOnly);
+    world.resource_registry.register(resource);
+}
+
+#[given(
     expr = "capability profile {string} for principal {string} in trust zone {string} with capabilities {string}"
 )]
 async fn capability_profile_for_principal(
