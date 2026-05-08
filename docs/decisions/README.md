@@ -66,7 +66,11 @@ matter to code structure.
   diagnostics for malformed TOML and missing required tables.
 - Initial package snapshots derive package module sources from a parsed
   manifest plus known in-memory package files, registering the library root and
-  `.anv` files under declared source roots without filesystem walking yet.
+  `.anv` files under declared source roots.
+- Initial filesystem package loading reads `Anvil.toml`, walks declared source
+  roots deterministically, loads `.anv` files into a package snapshot, and
+  reports project-phase diagnostics for missing manifests and missing declared
+  library files or source roots.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 

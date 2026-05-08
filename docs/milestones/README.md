@@ -51,6 +51,10 @@ Current slice:
   diagnostics for malformed TOML and missing required tables.
 - Package snapshots can build a package-root module resolver from a parsed
   manifest plus known in-memory `.anv` files under declared source roots.
+- Filesystem package loading reads `Anvil.toml`, walks declared source roots,
+  loads `.anv` files into a package snapshot, and emits project-phase
+  diagnostics for missing manifests and missing declared library files or source
+  roots.
 
 ## M3: Bytecode VM Foundation
 

@@ -15,6 +15,7 @@ pub enum DiagnosticPhase {
     Syntax,
     Module,
     Manifest,
+    Project,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -28,9 +28,12 @@ the resolution order and module diagnostics, the first `Anvil.toml` parser reads
 package identity, library root, source/test/eval/example roots, and workspace
 members from TOML text with manifest-phase diagnostics, and `PackageSnapshot`
 bridges a parsed manifest plus known package files into package-root module
-sources. Filesystem walking, lockfile handling, registry/dependency indexing,
-bins, capabilities, budgets, and package metadata remain later package-system
-work.
+sources. The filesystem loader now reads `Anvil.toml`, walks declared source
+roots deterministically, reads `.anv` files into a package snapshot, and reports
+project-phase diagnostics for missing manifests or missing declared source
+roots or library files. Lockfile handling, registry/dependency indexing,
+workspace members, bins, capabilities, budgets, and package metadata remain
+later package-system work.
 
 Open implementation dependency: full manifest schema and value serialization
 should be chosen with the reader syntax, diagnostics protocol, capability

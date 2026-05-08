@@ -27,7 +27,10 @@ pub use module::{
     ModuleCandidate, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
     ModuleSource,
 };
-pub use project::{PackageSnapshot, PackageSourceFile, package_module_sources};
+pub use project::{
+    PackageSnapshot, PackageSourceFile, ProjectDiagnostic, ProjectResult, load_package_snapshot,
+    package_module_sources,
+};
 pub use reader::{
     Datum, ReaderDiagnostic, SpannedDatum, format_datums, read_source, read_source_text,
 };

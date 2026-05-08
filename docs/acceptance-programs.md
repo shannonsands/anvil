@@ -53,6 +53,9 @@ The first executable acceptance harness is intentionally tiny but real:
 - `package_snapshot.feature` covers the first manifest-backed package snapshot:
   library module registration, source-root module derivation, and ignoring
   package files outside declared source roots.
+- `filesystem_package_loading.feature` covers loading a real package directory
+  into the resolver, plus project-phase diagnostics for a missing `Anvil.toml`
+  and missing declared library files or source roots.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as

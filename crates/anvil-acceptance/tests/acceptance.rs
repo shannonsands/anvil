@@ -1,11 +1,16 @@
-use std::path::Path;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anvil_core::{
     AnvilManifest, AstDiagnostic, DraftOverlay, ManifestDiagnostic, ModuleDiagnostic,
     ModuleResolution, ModuleResolver, ModuleRootKind, PackageSnapshot, PackageSourceFile,
-    ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic, SyntaxObject,
-    format_ast, format_datums, lower_source, lower_source_with_resolver, parse_manifest,
-    read_repl_input, syntax_from_source,
+    ProjectDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic,
+    SyntaxObject, format_ast, format_datums, load_package_snapshot, lower_source,
+    lower_source_with_resolver, parse_manifest, read_repl_input, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -30,6 +35,16 @@ struct AnvilWorld {
     manifest: Option<AnvilManifest>,
     manifest_diagnostic: Option<Box<ManifestDiagnostic>>,
     package_sources: Vec<PackageSourceFile>,
+    filesystem_package_root: Option<PathBuf>,
+    project_diagnostic: Option<Box<ProjectDiagnostic>>,
+}
+
+impl Drop for AnvilWorld {
+    fn drop(&mut self) {
+        if let Some(root) = &self.filesystem_package_root {
+            let _ = fs::remove_dir_all(root);
+        }
+    }
 }
 
 #[given("a fresh Anvil planning scaffold")]
@@ -99,6 +114,34 @@ async fn package_source_contains(world: &mut AnvilWorld, path: String, source: S
     world
         .package_sources
         .push(PackageSourceFile { path, source });
+}
+
+#[given("an empty filesystem package")]
+async fn empty_filesystem_package(world: &mut AnvilWorld) {
+    world.filesystem_package_root = Some(create_temp_package_root());
+    world.project_diagnostic = None;
+}
+
+#[given("a filesystem package with manifest")]
+async fn filesystem_package_with_manifest(world: &mut AnvilWorld, #[step] step: &Step) {
+    let root = create_temp_package_root();
+    write_package_file(
+        &root,
+        "Anvil.toml",
+        trim_docstring(step.docstring().expect("manifest input")),
+    );
+    world.filesystem_package_root = Some(root);
+    world.project_diagnostic = None;
+}
+
+#[given(expr = "filesystem package source {string} contains {string}")]
+async fn filesystem_package_source_contains(world: &mut AnvilWorld, path: String, source: String) {
+    let root = world
+        .filesystem_package_root
+        .as_ref()
+        .expect("filesystem package root");
+
+    write_package_file(root, &path, &source);
 }
 
 #[when("the reader-backed REPL reads the input")]
@@ -218,6 +261,26 @@ async fn package_snapshot_builds_module_resolver(world: &mut AnvilWorld) {
     world.module_resolver = snapshot.module_resolver();
     world.module_resolution = None;
     world.module_diagnostic = None;
+}
+
+#[when("the filesystem package snapshot is loaded")]
+async fn filesystem_package_snapshot_is_loaded(world: &mut AnvilWorld) {
+    let root = world
+        .filesystem_package_root
+        .as_ref()
+        .expect("filesystem package root");
+
+    match load_package_snapshot(root) {
+        Ok(snapshot) => {
+            world.module_resolver = snapshot.module_resolver();
+            world.project_diagnostic = None;
+            world.module_resolution = None;
+            world.module_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.project_diagnostic = Some(diagnostic);
+        }
+    }
 }
 
 #[when(expr = "the module resolver resolves {string}")]
@@ -672,6 +735,27 @@ async fn manifest_diagnostic_phase_is(world: &mut AnvilWorld, expected: String) 
     assert_eq!(json["phase"], expected);
 }
 
+#[then(expr = "the project diagnostic code is {string}")]
+async fn project_diagnostic_code_is(world: &mut AnvilWorld, expected: String) {
+    let diagnostic = world
+        .project_diagnostic
+        .as_ref()
+        .expect("project diagnostic");
+
+    assert_eq!(diagnostic.code, expected);
+}
+
+#[then(expr = "the project diagnostic phase is {string}")]
+async fn project_diagnostic_phase_is(world: &mut AnvilWorld, expected: String) {
+    let diagnostic = world
+        .project_diagnostic
+        .as_ref()
+        .expect("project diagnostic");
+    let json = serde_json::to_value(diagnostic).expect("diagnostic JSON");
+
+    assert_eq!(json["phase"], expected);
+}
+
 fn trim_docstring(value: &str) -> &str {
     value.trim_matches('\n')
 }
@@ -682,6 +766,30 @@ fn split_csv(value: &str) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+fn create_temp_package_root() -> PathBuf {
+    static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+
+    let unique_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "anvil-acceptance-package-{}-{nanos}-{unique_id}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("temporary package root");
+
+    root
+}
+
+fn write_package_file(root: &Path, path: &str, source: &str) {
+    let path = root.join(path);
+    fs::create_dir_all(path.parent().expect("file parent")).expect("package file parent");
+    fs::write(path, source).expect("package file");
 }
 
 #[then("the response is a reader error")]
