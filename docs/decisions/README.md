@@ -94,3 +94,32 @@ matter to code structure.
   value enum.
 - Resource-handle contract for Rust, MarkoDB, tensor, file, network, process,
   runtime table, actor, debug, and secret resources.
+- Concrete runtime syntax for `defactor`, supervisors, atoms, channels,
+  task groups, PubSub, hooks, watchers, event streams, and reactive forms.
+- Debugger and attach semantics: breakpoints, frame inspection, debug eval,
+  rewind/fork, scheduler replay, effect barriers, and debug authority.
+- ETS-like runtime table semantics, persistence modes, watch/subscribe
+  behavior, ownership, and access control.
+- Module execution semantics beyond resolution: dynamic require, draft
+  activation, module generations, bytecode cache invalidation, staged
+  replacement, rollback, and versioning.
+- Macro system contract: CL-style compiler macros, reader macros, hygiene
+  policy, expansion traces, macro capabilities, typed lowering, and declarative
+  IR expansion.
+- Compute and device resource model: CPU/WebGPU/Candle/MightyGrad backend
+  ladder, tensor buffers, placement, compute IR, shader/backend diagnostics,
+  and CPU/GPU equivalence tests.
+- Type syntax details: generics, hard type patterns, soft membership patterns,
+  dimension-tracked vectors, shape variables, effect/capability types, and
+  resource-handle types.
+- WASM import manifest and host ABI: profile syntax, value ABI, native runtime
+  choice, component-model boundary, browser/server profiles, and debug metadata
+  exposure.
+- MarkoDB standard-library slice boundaries: which declarative forms are core
+  forms versus standard-library macros with compiler hooks, and the first
+  mandatory eval domains.
+- Learned policy and training artifact contract: environment/simulation IR,
+  training job resources, policy metadata, artifact references, and capability
+  boundaries.
+- Independent MightyGrad completion milestone and adapter contract so Anvil can
+  target it without folding tensor-kernel ownership into the language runtime.
