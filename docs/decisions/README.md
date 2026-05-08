@@ -81,6 +81,11 @@ matter to code structure.
   fuel-accounted. It executes top-level expression sequences, literals,
   vectors, ordered maps, `do`, and `if`, while unsupported executable forms
   produce compile-phase diagnostics.
+- Ordinary language values use tracing GC as the primary memory model. The
+  first real collector should be precise, stop-the-world, non-moving, and
+  safe-point based, with opaque value references, immutable default values,
+  explicit mutable abstractions, and supervisor-owned resource handles outside
+  the ordinary heap.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 
@@ -89,9 +94,9 @@ matter to code structure.
 - First acceptance programs and eval matrix.
 - Reader and syntax details beyond the initial datum reader: namespaces, exact
   numeric literal sugar, metadata, tagged literals, and reader macros.
-- Full value representation, heap layout, tracing GC strategy, persistent
-  collection layout, and host/resource handle rooting beyond the bootstrap VM
-  value enum.
+- Concrete persistent collection layouts, root-table implementation details,
+  GC tuning, and later generational/incremental/compacting collector strategy
+  beyond the initial tracing-GC contract.
 - Resource-handle contract for Rust, MarkoDB, tensor, file, network, process,
   runtime table, actor, debug, and secret resources.
 - Concrete runtime syntax for `defactor`, supervisors, atoms, channels,

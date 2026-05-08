@@ -8,7 +8,7 @@ Exit criteria:
 - Obsidian planning links to this repo.
 - First acceptance matrix is drafted.
 - Syntax, GC, resource-handle, capability, diagnostics, host API, package, and
-  numeric decision dives are scheduled.
+  numeric decision dives are scheduled or drafted.
 - Initial executable Cucumber acceptance harness exists.
 
 ## M1: Reader-Backed REPL, Datum Reader, Errors
@@ -75,6 +75,9 @@ Current slice:
   literals, vectors, ordered maps, `do`, and `if`.
 - Unsupported executable forms should fail with compile-phase diagnostics until
   closures, calls, definitions, modules, and host calls have their contracts.
+- The final value direction is now locked as tracing-GC-managed immutable
+  language values with explicit mutable abstractions and supervisor-owned
+  resource handles outside the ordinary heap.
 
 ## M4: Host API And Capabilities
 

@@ -14,7 +14,8 @@ Implementation-facing decision:
   execution must not use Rust recursion for runtime control flow.
 - The bootstrap value representation is an owned immutable `Value` enum for
   nil, booleans, integers, `Float64`, strings, keywords, vectors, and ordered
-  maps. This is a bootstrap surface, not the final heap layout.
+  maps. This is a bootstrap surface, not the final heap layout. The final
+  direction is covered by `docs/decisions/value-heap-gc.md`.
 - `false` and `nil` are falsey for branch tests; all other values are truthy.
 - The first compiler supports top-level expression sequences, literals,
   vectors, ordered maps, `do`, and `if`.
@@ -35,7 +36,7 @@ Non-goals for this slice:
 
 Open follow-up decisions:
 
-- Full value representation, heap layout, tracing GC, persistent collection
-  layout, and host/resource handle rooting.
+- Concrete persistent collection layout and root-table implementation details
+  inside the tracing-GC direction.
 - Closure/call-frame representation and tail-call opcode details.
 - Module bytecode cache serialization and bytecode versioning policy.

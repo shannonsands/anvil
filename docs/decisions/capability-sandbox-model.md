@@ -22,5 +22,6 @@ Implementation-facing decision:
 - Native Rust host adapters are trusted runtime code. Keep them small, typed,
   capability-aware, and audited.
 
-Open implementation dependency: finish the value representation and resource
-handle decisions before encoding this in Rust types.
+Open implementation dependency: the value/heap/GC direction is drafted in
+`docs/decisions/value-heap-gc.md`; finish the resource-handle contract before
+encoding the low-level sandbox model in Rust types.

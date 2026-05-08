@@ -17,6 +17,9 @@ Initial candidates:
 - Actor with mailbox, supervised restart, and REPL inspection.
 - Capability denial example for file, network, debug attach, and resource
   handle use.
+- Value/heap stress example with cyclic language graphs, actor roots, process
+  cancellation, resource handle revocation, and debug inspection without raw
+  address exposure.
 - Staged module replacement: draft, compile, test, approve, activate, rollback.
 - WASM profile example with explicit host imports.
 - Tiny tensor/resource example once the value/resource model is coherent.

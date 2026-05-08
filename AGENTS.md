@@ -34,6 +34,9 @@ Preserve these unless the planning docs are updated first:
 - Immutable language values by default; explicit mutation through controlled
   cells, actors, resource handles, transient builders, tables, or Rust-backed
   internals.
+- Ordinary language heap values use tracing GC; host resources, tensors,
+  devices, files, secrets, actors, runtime tables, and debug ports stay behind
+  supervisor-owned opaque handles.
 - WASM is a sandbox and portability target, not the whole security model.
 - MightyGrad remains a separate tensor/backend project that Anvil can target
   later through a backend adapter.
