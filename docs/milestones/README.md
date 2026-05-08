@@ -40,6 +40,8 @@ Current slice:
   deterministic ids and initial hygiene context fields.
 - Syntax diagnostics reuse the shared diagnostic envelope with
   `phase: syntax`.
+- Deterministic module resolver core exists for package, draft, workspace,
+  dependency, standard-library, and host roots, with module-phase diagnostics.
 
 ## M3: Bytecode VM Foundation
 

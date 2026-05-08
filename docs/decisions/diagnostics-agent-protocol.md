@@ -16,15 +16,15 @@ Implementation-facing decision:
   stable across REPL, host API, tests, evals, debugger, and module workflows.
 - Large traces and expansion output should be returned by id, not dumped into
   every response.
-- Reader and syntax diagnostics now provide the first concrete Rust API shape
-  for this protocol: source id, severity, phase, primary span, labels,
+- Reader, syntax, and module diagnostics now provide the first concrete Rust
+  API shape for this protocol: source id, severity, phase, primary span, labels,
   expected/actual values, suggestions, and a source code frame.
 
 Current diagnostic fields:
 
 - `code`: stable machine-readable reason code.
 - `severity`: currently `error`.
-- `phase`: currently `reader` or `syntax`.
+- `phase`: currently `reader`, `syntax`, or `module`.
 - `message`: concise human summary.
 - `source_id`: source identity such as `repl`, `stdin`, or a future module id.
 - `primary_span` and `span`: source span for compatibility and explicit

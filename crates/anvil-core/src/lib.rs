@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod diagnostic;
+pub mod module;
 pub mod reader;
 pub mod repl;
 pub mod source;
@@ -12,6 +13,10 @@ pub use ast::{
 pub use diagnostic::{
     Diagnostic, DiagnosticCodeFrame, DiagnosticLabel, DiagnosticPhase, DiagnosticSeverity,
     DiagnosticSuggestion,
+};
+pub use module::{
+    ModuleCandidate, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
+    ModuleSource,
 };
 pub use reader::{
     Datum, ReaderDiagnostic, SpannedDatum, format_datums, read_source, read_source_text,

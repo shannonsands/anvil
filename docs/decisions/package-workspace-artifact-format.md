@@ -23,5 +23,10 @@ Implementation-facing decision:
 - Tests and evals assert structured responses, diagnostics, spans, effects, and
   denials, not just printed output.
 
+Current implementation slice: an in-memory deterministic module resolver now
+models the resolution order and module diagnostics. Manifest parsing, filesystem
+walking, lockfile handling, and registry/dependency indexing remain later
+package-system work.
+
 Open implementation dependency: exact manifest schema and value serialization
 should be chosen with the reader syntax and diagnostics protocol.

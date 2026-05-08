@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use anvil_core::{
-    AstDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic,
-    SyntaxObject, format_ast, format_datums, lower_source, read_repl_input, syntax_from_source,
+    AstDiagnostic, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
+    ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic, SyntaxObject,
+    format_ast, format_datums, lower_source, read_repl_input, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -19,11 +20,21 @@ struct AnvilWorld {
     ast_diagnostic: Option<Box<AstDiagnostic>>,
     syntax_objects: Option<Vec<SyntaxObject>>,
     syntax_diagnostic: Option<Box<SyntaxDiagnostic>>,
+    module_resolver: ModuleResolver,
+    module_resolution: Option<ModuleResolution>,
+    module_diagnostic: Option<Box<ModuleDiagnostic>>,
 }
 
 #[given("a fresh Anvil planning scaffold")]
 async fn fresh_scaffold(world: &mut AnvilWorld) {
     world.response = None;
+}
+
+#[given("a fresh module resolver")]
+async fn fresh_module_resolver(world: &mut AnvilWorld) {
+    world.module_resolver = ModuleResolver::new();
+    world.module_resolution = None;
+    world.module_diagnostic = None;
 }
 
 #[when("the agent asks for the project shape")]
@@ -91,6 +102,33 @@ async fn syntax_layer_lowers_input(world: &mut AnvilWorld) {
         Err(diagnostic) => {
             world.ast = None;
             world.ast_diagnostic = Some(diagnostic);
+        }
+    }
+}
+
+#[given(expr = "module {string} exists in {word} root {string} at {string}")]
+async fn module_exists_in_root(
+    world: &mut AnvilWorld,
+    module: String,
+    root_kind: String,
+    root_name: String,
+    path: String,
+) {
+    world
+        .module_resolver
+        .add_module(parse_module_root_kind(&root_kind), root_name, module, path);
+}
+
+#[when(expr = "the module resolver resolves {string}")]
+async fn module_resolver_resolves(world: &mut AnvilWorld, module: String) {
+    match world.module_resolver.resolve(&module) {
+        Ok(resolution) => {
+            world.module_resolution = Some(resolution);
+            world.module_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.module_resolution = None;
+            world.module_diagnostic = Some(diagnostic);
         }
     }
 }
@@ -307,6 +345,28 @@ fn first_syntax_object(world: &mut AnvilWorld) -> &SyntaxObject {
         .expect("first syntax object")
 }
 
+#[then(expr = "the module resolution root kind is {string}")]
+async fn module_resolution_root_kind_is(world: &mut AnvilWorld, expected: String) {
+    let resolution = world.module_resolution.as_ref().expect("module resolution");
+    let json = serde_json::to_value(resolution).expect("module resolution JSON");
+
+    assert_eq!(json["root_kind"], expected);
+}
+
+#[then(expr = "the module resolution root name is {string}")]
+async fn module_resolution_root_name_is(world: &mut AnvilWorld, expected: String) {
+    let resolution = world.module_resolution.as_ref().expect("module resolution");
+
+    assert_eq!(resolution.root_name, expected);
+}
+
+#[then(expr = "the module resolution path is {string}")]
+async fn module_resolution_path_is(world: &mut AnvilWorld, expected: String) {
+    let resolution = world.module_resolution.as_ref().expect("module resolution");
+
+    assert_eq!(resolution.path, expected);
+}
+
 fn trim_docstring(value: &str) -> &str {
     value.trim_matches('\n')
 }
@@ -458,6 +518,28 @@ async fn syntax_object_diagnostic_phase_is(world: &mut AnvilWorld, expected: Str
     assert_eq!(json["phase"], expected);
 }
 
+#[then(expr = "the module diagnostic code is {string}")]
+async fn module_diagnostic_code_is(world: &mut AnvilWorld, expected: String) {
+    let diagnostic = world.module_diagnostic.as_ref().expect("module diagnostic");
+
+    assert_eq!(diagnostic.code, expected);
+}
+
+#[then(expr = "the module diagnostic phase is {string}")]
+async fn module_diagnostic_phase_is(world: &mut AnvilWorld, expected: String) {
+    let diagnostic = world.module_diagnostic.as_ref().expect("module diagnostic");
+    let json = serde_json::to_value(diagnostic).expect("diagnostic JSON");
+
+    assert_eq!(json["phase"], expected);
+}
+
+#[then(expr = "the module diagnostic expected candidates include {string}")]
+async fn module_diagnostic_expected_candidates_include(world: &mut AnvilWorld, expected: String) {
+    let diagnostic = world.module_diagnostic.as_ref().expect("module diagnostic");
+
+    assert!(diagnostic.expected.contains(&expected));
+}
+
 #[then(expr = "the rendered diagnostic contains {string}")]
 async fn rendered_diagnostic_contains(world: &mut AnvilWorld, expected: String) {
     let rendered = world
@@ -476,6 +558,19 @@ async fn json_buffered_line_count_is(world: &mut AnvilWorld, expected: usize) {
     let json = world.json_response.as_ref().expect("JSON response");
 
     assert_eq!(json["buffered_lines"], expected);
+}
+
+fn parse_module_root_kind(value: &str) -> ModuleRootKind {
+    match value {
+        "package" => ModuleRootKind::Package,
+        "draft" => ModuleRootKind::Draft,
+        "workspace" => ModuleRootKind::Workspace,
+        "locked-dependency" => ModuleRootKind::LockedDependency,
+        "vendored-dependency" => ModuleRootKind::VendoredDependency,
+        "standard-library" => ModuleRootKind::StandardLibrary,
+        "host" => ModuleRootKind::Host,
+        other => panic!("unknown module root kind {other}"),
+    }
 }
 
 #[tokio::main]

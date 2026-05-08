@@ -13,6 +13,7 @@ pub enum DiagnosticSeverity {
 pub enum DiagnosticPhase {
     Reader,
     Syntax,
+    Module,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

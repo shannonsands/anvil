@@ -53,6 +53,9 @@ matter to code structure.
   syntax-phase diagnostics.
 - Initial syntax objects wrap reader datums with deterministic ids, source ids,
   spans, and empty hygiene context fields for future scopes and marks.
+- Initial module resolution is deterministic and explicit across package,
+  draft, workspace, locked dependency, vendored dependency, standard-library,
+  and host roots, with module-phase diagnostics for missing or ambiguous names.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 
