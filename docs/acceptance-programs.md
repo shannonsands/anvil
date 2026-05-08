@@ -59,6 +59,9 @@ The first executable acceptance harness is intentionally tiny but real:
 - `workspace_loading.feature` covers workspace member loading from
   `[workspace].members`, root-package precedence over workspace members, missing
   member manifests, and ambiguous workspace module diagnostics.
+- `bytecode_vm.feature` covers the first executable VM behavior: running
+  literals, expression sequences, `if`, vectors, maps, compile diagnostics for
+  unsupported forms, and runtime diagnostics for fuel exhaustion.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as

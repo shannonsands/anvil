@@ -4,9 +4,10 @@ Anvil is the implementation home for a long-term Rust language/runtime project:
 a Chez-quality Lisp-family system for agent programming, declarative reasoning,
 secure live runtimes, and eventual ML-native compute.
 
-This repository is intentionally minimal right now. The active work is Phase 0:
-charter, requirements, and design decisions. The local planning workspace lives
-at:
+This repository is still early, but it now has the first executable language
+slice: a reader-backed REPL, source-aware AST lowering, deterministic module
+planning surfaces, and a bootstrap register-based bytecode VM. The local
+planning workspace lives at:
 
 `/Users/shannon/Workspace/Workspace/Obsidian/Global/Projects/anvil-language-runtime`
 
@@ -14,6 +15,8 @@ at:
 
 - Rust workspace with a tiny smoke-testable core crate and CLI crate.
 - Bytecode VM first, not native JIT first.
+- Bootstrap register-based VM for literals, vectors, ordered maps, `do`, `if`,
+  source-mapped compile/runtime diagnostics, and instruction fuel.
 - Agent REPL, debugger, and runtime attach are core product surfaces.
 - Capability-aware runtime kernel, process/task isolation, and auditable
   resource handles.
@@ -64,4 +67,5 @@ coverage-backed CRAP analysis with no approved baseline. `check-deep` adds
 cargo test
 cargo test -p anvil-acceptance --test acceptance
 cargo run -p anvil-cli
+cargo run -p anvil-cli -- run "(if false :yes :no)"
 ```

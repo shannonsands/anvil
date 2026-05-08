@@ -9,8 +9,9 @@ use anvil_core::{
     AnvilManifest, AstDiagnostic, DraftOverlay, ManifestDiagnostic, ModuleDiagnostic,
     ModuleResolution, ModuleResolver, ModuleRootKind, PackageSnapshot, PackageSourceFile,
     ProjectDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic,
-    SyntaxObject, format_ast, format_datums, load_package_snapshot, load_workspace_snapshot,
-    lower_source, lower_source_with_resolver, parse_manifest, read_repl_input, syntax_from_source,
+    SyntaxObject, Vm, VmBudget, VmDiagnostic, VmOutput, compile_source, format_ast, format_datums,
+    load_package_snapshot, load_workspace_snapshot, lower_source, lower_source_with_resolver,
+    parse_manifest, read_repl_input, run_source, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -37,6 +38,8 @@ struct AnvilWorld {
     package_sources: Vec<PackageSourceFile>,
     filesystem_package_root: Option<PathBuf>,
     project_diagnostic: Option<Box<ProjectDiagnostic>>,
+    vm_output: Option<VmOutput>,
+    vm_diagnostic: Option<Box<VmDiagnostic>>,
 }
 
 impl Drop for AnvilWorld {
@@ -88,6 +91,8 @@ async fn agent_input(world: &mut AnvilWorld, source: String) {
     world.ast_diagnostic = None;
     world.syntax_objects = None;
     world.syntax_diagnostic = None;
+    world.vm_output = None;
+    world.vm_diagnostic = None;
 }
 
 #[given("the agent input")]
@@ -99,6 +104,8 @@ async fn agent_doc_input(world: &mut AnvilWorld, #[step] step: &Step) {
     world.ast_diagnostic = None;
     world.syntax_objects = None;
     world.syntax_diagnostic = None;
+    world.vm_output = None;
+    world.vm_diagnostic = None;
 }
 
 #[given("the manifest input")]
@@ -158,6 +165,36 @@ async fn filesystem_package_file(world: &mut AnvilWorld, path: String, #[step] s
 #[when("the reader-backed REPL reads the input")]
 async fn reader_repl_reads_input(world: &mut AnvilWorld) {
     world.repl_response = Some(read_repl_input(&world.source));
+}
+
+#[when("the bytecode VM runs the input")]
+async fn bytecode_vm_runs_input(world: &mut AnvilWorld) {
+    match run_source(&world.source) {
+        Ok(output) => {
+            world.vm_output = Some(output);
+            world.vm_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.vm_output = None;
+            world.vm_diagnostic = Some(diagnostic);
+        }
+    }
+}
+
+#[when(expr = "the bytecode VM runs the input with {int} instruction fuel")]
+async fn bytecode_vm_runs_input_with_instruction_fuel(world: &mut AnvilWorld, fuel: usize) {
+    match compile_source(&world.source)
+        .and_then(|program| Vm::with_budget(VmBudget::with_instruction_fuel(fuel)).run(&program))
+    {
+        Ok(output) => {
+            world.vm_output = Some(output);
+            world.vm_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.vm_output = None;
+            world.vm_diagnostic = Some(diagnostic);
+        }
+    }
 }
 
 #[when("the syntax object layer wraps the input")]
@@ -522,6 +559,13 @@ fn first_ast_json(world: &mut AnvilWorld) -> serde_json::Value {
     serde_json::to_value(ast.first().expect("first AST")).expect("AST JSON")
 }
 
+#[then(expr = "the VM value prints as {string}")]
+async fn vm_value_prints_as(world: &mut AnvilWorld, expected: String) {
+    let output = world.vm_output.as_ref().expect("VM output");
+
+    assert_eq!(output.value.to_string(), expected);
+}
+
 #[then(expr = "the syntax object count is {int}")]
 async fn syntax_object_count_is(world: &mut AnvilWorld, expected: usize) {
     let objects = world
@@ -785,6 +829,33 @@ async fn project_diagnostic_phase_is(world: &mut AnvilWorld, expected: String) {
     let json = serde_json::to_value(diagnostic).expect("diagnostic JSON");
 
     assert_eq!(json["phase"], expected);
+}
+
+#[then(expr = "the VM diagnostic code is {string}")]
+async fn vm_diagnostic_code_is(world: &mut AnvilWorld, expected: String) {
+    let diagnostic = world.vm_diagnostic.as_ref().expect("VM diagnostic");
+
+    assert_eq!(diagnostic.code, expected);
+}
+
+#[then(expr = "the VM diagnostic phase is {string}")]
+async fn vm_diagnostic_phase_is(world: &mut AnvilWorld, expected: String) {
+    let diagnostic = world.vm_diagnostic.as_ref().expect("VM diagnostic");
+    let json = serde_json::to_value(diagnostic).expect("diagnostic JSON");
+
+    assert_eq!(json["phase"], expected);
+}
+
+#[then(expr = "the VM diagnostic primary span starts at line {int} column {int}")]
+async fn vm_diagnostic_primary_span_starts_at(
+    world: &mut AnvilWorld,
+    expected_line: usize,
+    expected_column: usize,
+) {
+    let diagnostic = world.vm_diagnostic.as_ref().expect("VM diagnostic");
+
+    assert_eq!(diagnostic.primary_span.start.line, expected_line);
+    assert_eq!(diagnostic.primary_span.start.column, expected_column);
 }
 
 fn trim_docstring(value: &str) -> &str {

@@ -24,7 +24,8 @@ Current diagnostic fields:
 
 - `code`: stable machine-readable reason code.
 - `severity`: currently `error`.
-- `phase`: currently `reader`, `syntax`, or `module`.
+- `phase`: currently `reader`, `syntax`, `module`, `manifest`, `project`,
+  `compile`, or `runtime`.
 - `message`: concise human summary.
 - `source_id`: source identity such as `repl`, `stdin`, or a future module id.
 - `primary_span` and `span`: source span for compatibility and explicit

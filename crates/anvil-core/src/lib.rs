@@ -8,6 +8,7 @@ pub mod reader;
 pub mod repl;
 pub mod source;
 pub mod syntax;
+pub mod vm;
 
 pub use ast::{
     AstDiagnostic, AstKind, AstLiteral, AstMapEntry, RequireImport, SpannedAst, format_ast,
@@ -39,6 +40,11 @@ pub use source::{SourceLocation, SourceSpan, SourceText};
 pub use syntax::{
     SyntaxContext, SyntaxDiagnostic, SyntaxObject, format_syntax_objects, syntax_from_datums,
     syntax_from_source, syntax_from_source_text,
+};
+pub use vm::{
+    BytecodeInstruction, BytecodeProgram, Instruction, MapRegisterEntry, Value, ValueMapEntry, Vm,
+    VmBudget, VmDiagnostic, VmOutput, compile_ast, compile_source, compile_source_text, run_source,
+    run_source_text,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

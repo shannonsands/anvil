@@ -6,7 +6,7 @@ use std::{
 
 use anvil_core::{
     ReaderDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxObject,
-    lower_source, project_shape, read_repl_input, syntax_from_source,
+    VmOutput, lower_source, project_shape, read_repl_input, run_source, syntax_from_source,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +40,13 @@ fn main() -> ExitCode {
             }
         },
         Some("ast") => match ast_command(args.collect()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("anvil: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("run") => match run_command(args.collect()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("anvil: {error}");
@@ -80,6 +87,7 @@ fn print_help() {
     println!(
         "  ast [SOURCE]  Lower SOURCE to the initial core AST, or read stdin when SOURCE is omitted."
     );
+    println!("  run [SOURCE]  Compile and run SOURCE in the bootstrap bytecode VM.");
     println!();
     println!("Options:");
     println!("  --json        Emit one JSON response object per input.");
@@ -229,6 +237,23 @@ fn ast_command(args: Vec<String>) -> io::Result<()> {
     Ok(())
 }
 
+fn run_command(args: Vec<String>) -> io::Result<()> {
+    let (format, args) = split_source_args(args)?;
+    let source = if args.is_empty() {
+        let mut source = String::new();
+        io::stdin().read_to_string(&mut source)?;
+        source
+    } else {
+        args.join(" ")
+    };
+
+    match run_source(&source) {
+        Ok(output) => print_run_response(&output, format)?,
+        Err(diagnostic) => print_run_diagnostic(&diagnostic, format)?,
+    }
+    Ok(())
+}
+
 fn split_read_args(args: Vec<String>) -> io::Result<(OutputFormat, Vec<String>)> {
     split_source_args(args)
 }
@@ -259,6 +284,13 @@ enum AstCommandResponse<'a> {
 #[serde(tag = "status", rename_all = "snake_case")]
 enum SyntaxCommandResponse<'a> {
     Syntax { objects: &'a [SyntaxObject] },
+    Error { diagnostic: &'a ReaderDiagnostic },
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum RunCommandResponse<'a> {
+    Value { output: &'a VmOutput },
     Error { diagnostic: &'a ReaderDiagnostic },
 }
 
@@ -311,6 +343,36 @@ fn print_ast_response(expressions: &[SpannedAst], format: OutputFormat) -> io::R
             println!(
                 "{}",
                 serde_json::to_string(&AstCommandResponse::Ast { expressions })?
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn print_run_response(output: &VmOutput, format: OutputFormat) -> io::Result<()> {
+    match format {
+        OutputFormat::Text => {
+            println!("value {}", output.value);
+        }
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string(&RunCommandResponse::Value { output })?
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn print_run_diagnostic(diagnostic: &ReaderDiagnostic, format: OutputFormat) -> io::Result<()> {
+    match format {
+        OutputFormat::Text => print_diagnostic(diagnostic),
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string(&RunCommandResponse::Error { diagnostic })?
             );
         }
     }

@@ -48,6 +48,7 @@ fn help_command_prints_commands() {
     let stdout = stdout_text(&output);
     assert!(stdout.contains("Commands:"));
     assert!(stdout.contains("read [SOURCE]"));
+    assert!(stdout.contains("run [SOURCE]"));
     assert!(stdout.contains("--json"));
 }
 
@@ -94,6 +95,25 @@ fn ast_command_prints_lowered_expression() {
 
     assert!(output.status.success());
     assert!(stdout_text(&output).contains("ast (if ready? :yes :no)"));
+}
+
+#[test]
+fn run_command_evaluates_in_bootstrap_vm() {
+    let output = run_anvil(&["run", "(if false :yes :no)"], "");
+
+    assert!(output.status.success());
+    assert!(stdout_text(&output).contains("value :no"));
+}
+
+#[test]
+fn run_command_reports_compile_diagnostics_as_json() {
+    let output = run_anvil(&["run", "--json", "(define answer 42)"], "");
+
+    assert!(output.status.success());
+    let stdout = stdout_text(&output);
+    assert!(stdout.contains(r#""status":"error""#));
+    assert!(stdout.contains("ANVIL_COMPILE_UNSUPPORTED_FORM"));
+    assert!(stdout.contains(r#""phase":"compile""#));
 }
 
 #[test]

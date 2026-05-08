@@ -69,6 +69,13 @@ Exit criteria:
 - Source-span runtime errors.
 - Basic fuel/budget accounting.
 
+Current slice:
+
+- Bootstrap register bytecode is scoped to top-level expression sequences,
+  literals, vectors, ordered maps, `do`, and `if`.
+- Unsupported executable forms should fail with compile-phase diagnostics until
+  closures, calls, definitions, modules, and host calls have their contracts.
+
 ## M4: Host API And Capabilities
 
 Exit criteria:

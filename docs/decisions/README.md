@@ -77,6 +77,10 @@ matter to code structure.
   `packages/*`, loads member package snapshots, registers member modules as
   `workspace` roots, preserves root-package precedence, and surfaces missing
   member manifests through project-phase diagnostics.
+- Initial bytecode VM foundation is register-based, source-mapped, and
+  fuel-accounted. It executes top-level expression sequences, literals,
+  vectors, ordered maps, `do`, and `if`, while unsupported executable forms
+  produce compile-phase diagnostics.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 
@@ -85,6 +89,8 @@ matter to code structure.
 - First acceptance programs and eval matrix.
 - Reader and syntax details beyond the initial datum reader: namespaces, exact
   numeric literal sugar, metadata, tagged literals, and reader macros.
-- Value representation, heap layout, and tracing GC strategy.
+- Full value representation, heap layout, tracing GC strategy, persistent
+  collection layout, and host/resource handle rooting beyond the bootstrap VM
+  value enum.
 - Resource-handle contract for Rust, MarkoDB, tensor, file, network, process,
   runtime table, actor, debug, and secret resources.
