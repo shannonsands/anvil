@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod diagnostic;
+pub mod draft;
 pub mod module;
 pub mod reader;
 pub mod repl;
@@ -14,6 +15,7 @@ pub use diagnostic::{
     Diagnostic, DiagnosticCodeFrame, DiagnosticLabel, DiagnosticPhase, DiagnosticSeverity,
     DiagnosticSuggestion,
 };
+pub use draft::{DraftModule, DraftOverlay, DraftStatus};
 pub use module::{
     ModuleCandidate, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
     ModuleSource,

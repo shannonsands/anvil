@@ -56,6 +56,9 @@ matter to code structure.
 - Initial module resolution is deterministic and explicit across package,
   draft, workspace, locked dependency, vendored dependency, standard-library,
   and host roots, with module-phase diagnostics for missing or ambiguous names.
+- Initial draft overlays are in-memory miniature worktrees with owner, status,
+  source overrides, virtual draft paths, diagnostics, and resolver shadow
+  metadata.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 

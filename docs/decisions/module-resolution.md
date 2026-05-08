@@ -28,6 +28,8 @@ Implementation-facing decision:
 - Missing and invalid modules use structured `phase: module` diagnostics.
 - Draft overlays can shadow workspace/dependency/standard/host modules, but not
   the current package in this first precedence model.
+- When a draft wins resolution, `ModuleResolution.shadowed` records the
+  lower-precedence source it shadows, when one exists.
 
 Current executable surface:
 

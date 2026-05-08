@@ -43,6 +43,8 @@ The first executable acceptance harness is intentionally tiny but real:
   pass-through.
 - `module_resolution.feature` covers deterministic root precedence, draft
   shadowing, ambiguous short-name diagnostics, and missing-module diagnostics.
+- `draft_overlays.feature` covers the first in-memory draft overlay shape:
+  owner, status, source override, virtual path, and diagnostics.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as

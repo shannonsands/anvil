@@ -42,6 +42,8 @@ Current slice:
   `phase: syntax`.
 - Deterministic module resolver core exists for package, draft, workspace,
   dependency, standard-library, and host roots, with module-phase diagnostics.
+- Draft overlay representation exists as an in-memory miniature worktree model,
+  including resolver shadow metadata.
 
 ## M3: Bytecode VM Foundation
 

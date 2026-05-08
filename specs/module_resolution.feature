@@ -14,10 +14,14 @@ Feature: Module resolution
   Scenario: Resolve a draft module before a workspace module
     Given a fresh module resolver
     And module "planner.search" exists in workspace root "workspace-tools" at "packages/tools/src/planner/search.anv"
-    And module "planner.search" exists in draft root "session-1" at ".anvil/drafts/session-1/src/planner/search.anv"
+    And draft overlay "session-1" owned by "agent.alpha" overrides module "planner.search" with source "(define answer 42)"
     When the module resolver resolves "planner.search"
     Then the module resolution root kind is "draft"
     And the module resolution root name is "session-1"
+    And the module resolution path is ".anvil/drafts/session-1/src/planner/search.anv"
+    And the module resolution shadows root kind "workspace"
+    And the module resolution shadows root name "workspace-tools"
+    And the module resolution shadows path "packages/tools/src/planner/search.anv"
 
   Scenario: Report ambiguous short module names
     Given a fresh module resolver

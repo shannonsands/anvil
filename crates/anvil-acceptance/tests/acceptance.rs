@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use anvil_core::{
-    AstDiagnostic, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
-    ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic, SyntaxObject,
-    format_ast, format_datums, lower_source, read_repl_input, syntax_from_source,
+    AstDiagnostic, DraftOverlay, ModuleDiagnostic, ModuleResolution, ModuleResolver,
+    ModuleRootKind, ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic,
+    SyntaxObject, format_ast, format_datums, lower_source, read_repl_input, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -23,6 +23,7 @@ struct AnvilWorld {
     module_resolver: ModuleResolver,
     module_resolution: Option<ModuleResolution>,
     module_diagnostic: Option<Box<ModuleDiagnostic>>,
+    draft_overlay: Option<DraftOverlay>,
 }
 
 #[given("a fresh Anvil planning scaffold")]
@@ -35,6 +36,12 @@ async fn fresh_module_resolver(world: &mut AnvilWorld) {
     world.module_resolver = ModuleResolver::new();
     world.module_resolution = None;
     world.module_diagnostic = None;
+    world.draft_overlay = None;
+}
+
+#[given(expr = "a fresh draft overlay {string} owned by {string}")]
+async fn fresh_draft_overlay(world: &mut AnvilWorld, draft_id: String, owner: String) {
+    world.draft_overlay = Some(DraftOverlay::new(draft_id, owner));
 }
 
 #[when("the agent asks for the project shape")]
@@ -117,6 +124,30 @@ async fn module_exists_in_root(
     world
         .module_resolver
         .add_module(parse_module_root_kind(&root_kind), root_name, module, path);
+}
+
+#[given(
+    expr = "draft overlay {string} owned by {string} overrides module {string} with source {string}"
+)]
+async fn draft_overlay_overrides_module(
+    world: &mut AnvilWorld,
+    draft_id: String,
+    owner: String,
+    module: String,
+    source: String,
+) {
+    let overlay = DraftOverlay::new(draft_id, owner).with_module(module, source);
+    world.module_resolver.add_draft_overlay(&overlay);
+    world.draft_overlay = Some(overlay);
+}
+
+#[when(expr = "the draft overlay adds module {string} with source {string}")]
+async fn draft_overlay_adds_module(world: &mut AnvilWorld, module: String, source: String) {
+    world
+        .draft_overlay
+        .as_mut()
+        .expect("draft overlay")
+        .add_module(module, source);
 }
 
 #[when(expr = "the module resolver resolves {string}")]
@@ -365,6 +396,91 @@ async fn module_resolution_path_is(world: &mut AnvilWorld, expected: String) {
     let resolution = world.module_resolution.as_ref().expect("module resolution");
 
     assert_eq!(resolution.path, expected);
+}
+
+#[then(expr = "the module resolution shadows root kind {string}")]
+async fn module_resolution_shadows_root_kind(world: &mut AnvilWorld, expected: String) {
+    let shadowed = module_resolution_shadowed(world);
+    let json = serde_json::to_value(shadowed).expect("shadowed module JSON");
+
+    assert_eq!(json["root_kind"], expected);
+}
+
+#[then(expr = "the module resolution shadows root name {string}")]
+async fn module_resolution_shadows_root_name(world: &mut AnvilWorld, expected: String) {
+    let shadowed = module_resolution_shadowed(world);
+
+    assert_eq!(shadowed.root_name, expected);
+}
+
+#[then(expr = "the module resolution shadows path {string}")]
+async fn module_resolution_shadows_path(world: &mut AnvilWorld, expected: String) {
+    let shadowed = module_resolution_shadowed(world);
+
+    assert_eq!(shadowed.path, expected);
+}
+
+fn module_resolution_shadowed(world: &mut AnvilWorld) -> &anvil_core::ModuleCandidate {
+    world
+        .module_resolution
+        .as_ref()
+        .expect("module resolution")
+        .shadowed
+        .as_ref()
+        .expect("shadowed module")
+}
+
+#[then(expr = "the draft overlay status is {string}")]
+async fn draft_overlay_status_is(world: &mut AnvilWorld, expected: String) {
+    let overlay = world.draft_overlay.as_ref().expect("draft overlay");
+    let json = serde_json::to_value(overlay).expect("draft overlay JSON");
+
+    assert_eq!(json["status"], expected);
+}
+
+#[then(expr = "the draft overlay owner is {string}")]
+async fn draft_overlay_owner_is(world: &mut AnvilWorld, expected: String) {
+    let overlay = world.draft_overlay.as_ref().expect("draft overlay");
+
+    assert_eq!(overlay.owner, expected);
+}
+
+#[then(expr = "the first draft module name is {string}")]
+async fn first_draft_module_name_is(world: &mut AnvilWorld, expected: String) {
+    let module = first_draft_module(world);
+
+    assert_eq!(module.module, expected);
+}
+
+#[then(expr = "the first draft module source is {string}")]
+async fn first_draft_module_source_is(world: &mut AnvilWorld, expected: String) {
+    let module = first_draft_module(world);
+
+    assert_eq!(module.source, expected);
+}
+
+#[then(expr = "the first draft module path is {string}")]
+async fn first_draft_module_path_is(world: &mut AnvilWorld, expected: String) {
+    let module = first_draft_module(world);
+
+    assert_eq!(module.path, expected);
+}
+
+#[then(expr = "the first draft module has {int} diagnostics")]
+async fn first_draft_module_has_diagnostics(world: &mut AnvilWorld, expected: usize) {
+    let module = first_draft_module(world);
+
+    assert_eq!(module.diagnostics.len(), expected);
+}
+
+fn first_draft_module(world: &mut AnvilWorld) -> &anvil_core::DraftModule {
+    world
+        .draft_overlay
+        .as_ref()
+        .expect("draft overlay")
+        .modules
+        .first()
+        .expect("first draft module")
 }
 
 fn trim_docstring(value: &str) -> &str {

@@ -2,6 +2,7 @@ use serde::Serialize;
 
 use crate::{
     diagnostic::{Diagnostic, DiagnosticPhase, DiagnosticSpec},
+    draft::DraftOverlay,
     source::{SourceLocation, SourceSpan, SourceText},
 };
 
@@ -68,6 +69,7 @@ pub struct ModuleResolution {
     pub root_kind: ModuleRootKind,
     pub root_name: String,
     pub path: String,
+    pub shadowed: Option<ModuleCandidate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -111,6 +113,11 @@ impl ModuleResolver {
         self.with_module(root_kind, root_name, module, path)
     }
 
+    pub fn with_draft_overlay(mut self, overlay: &DraftOverlay) -> Self {
+        self.add_draft_overlay(overlay);
+        self
+    }
+
     pub fn add_module(
         &mut self,
         root_kind: ModuleRootKind,
@@ -118,9 +125,17 @@ impl ModuleResolver {
         module: impl Into<String>,
         path: impl Into<String>,
     ) {
-        let registration_index = self.sources.len();
-        let mut source = ModuleSource::new(root_kind, root_name, module, path);
-        source.registration_index = registration_index;
+        self.add_source(ModuleSource::new(root_kind, root_name, module, path));
+    }
+
+    pub fn add_draft_overlay(&mut self, overlay: &DraftOverlay) {
+        for source in overlay.module_sources() {
+            self.add_source(source);
+        }
+    }
+
+    pub fn add_source(&mut self, mut source: ModuleSource) {
+        source.registration_index = self.sources.len();
         self.sources.push(source);
     }
 
@@ -253,7 +268,10 @@ impl ModuleResolver {
             }));
         }
 
-        Ok(ModuleResolution::from(exact[0]))
+        Ok(resolution_from_source(
+            exact[0],
+            shadowed_source(exact[0], &exact),
+        ))
     }
 }
 
@@ -282,13 +300,7 @@ impl ModuleSource {
 
 impl From<&ModuleSource> for ModuleResolution {
     fn from(source: &ModuleSource) -> Self {
-        Self {
-            module: source.module.clone(),
-            source_id: source.source_id(),
-            root_kind: source.root_kind,
-            root_name: source.root_name.clone(),
-            path: source.path.clone(),
-        }
+        resolution_from_source(source, None)
     }
 }
 
@@ -302,6 +314,31 @@ impl From<&ModuleSource> for ModuleCandidate {
             path: source.path.clone(),
         }
     }
+}
+
+fn resolution_from_source(
+    source: &ModuleSource,
+    shadowed: Option<ModuleCandidate>,
+) -> ModuleResolution {
+    ModuleResolution {
+        module: source.module.clone(),
+        source_id: source.source_id(),
+        root_kind: source.root_kind,
+        root_name: source.root_name.clone(),
+        path: source.path.clone(),
+        shadowed,
+    }
+}
+
+fn shadowed_source(source: &ModuleSource, candidates: &[&ModuleSource]) -> Option<ModuleCandidate> {
+    if source.root_kind != ModuleRootKind::Draft {
+        return None;
+    }
+
+    candidates
+        .iter()
+        .find(|candidate| candidate.root_kind.rank() > source.root_kind.rank())
+        .map(|candidate| ModuleCandidate::from(*candidate))
 }
 
 struct ModuleDiagnosticSpec<'source> {
@@ -389,18 +426,19 @@ mod tests {
 
     #[test]
     fn lets_drafts_shadow_workspace_modules() {
+        let overlay = DraftOverlay::new("session-1", "agent.alpha")
+            .with_module("planner.search", "(define answer 42)");
         let resolver = ModuleResolver::new()
             .with_default_path_module(ModuleRootKind::Workspace, "workspace", "planner.search")
-            .with_module(
-                ModuleRootKind::Draft,
-                "session-1",
-                "planner.search",
-                ".anvil/drafts/session-1/src/planner/search.anv",
-            );
+            .with_draft_overlay(&overlay);
 
         let resolution = resolver.resolve("planner.search").unwrap();
 
         assert_eq!(resolution.root_kind, ModuleRootKind::Draft);
+        assert_eq!(
+            resolution.shadowed.map(|source| source.root_kind),
+            Some(ModuleRootKind::Workspace)
+        );
     }
 
     #[test]
