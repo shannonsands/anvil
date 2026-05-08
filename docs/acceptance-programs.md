@@ -37,7 +37,9 @@ The first executable acceptance harness is intentionally tiny but real:
   JSON-serializable diagnostics, and source-aware diagnostic rendering.
 - `ast_lowering.feature` covers the first syntax layer behavior: lowering
   definition and function forms, serializing AST JSON, and returning
-  syntax-phase diagnostics.
+  syntax-phase diagnostics. It also covers minimal `require` lowering,
+  resolver-backed import metadata, and module diagnostics at the module name
+  span.
 - `syntax_objects.feature` covers deterministic syntax-object ids, source ids,
   spans, initial hygiene context serialization, and reader diagnostic
   pass-through.

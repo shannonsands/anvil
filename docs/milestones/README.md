@@ -35,13 +35,15 @@ Exit criteria:
 Current slice:
 
 - Core AST lowering exists for literals, symbols, quote, `define`, `if`, `do`,
-  `fn`/`lambda`, calls, vectors, and maps.
+  `fn`/`lambda`, `require`, calls, vectors, and maps.
 - Syntax objects exist as a span-preserving wrapper around reader datums, with
   deterministic ids and initial hygiene context fields.
 - Syntax diagnostics reuse the shared diagnostic envelope with
   `phase: syntax`.
 - Deterministic module resolver core exists for package, draft, workspace,
   dependency, standard-library, and host roots, with module-phase diagnostics.
+- Resolver-backed `require` lowering records resolved import metadata and
+  reports module diagnostics at the module name source span.
 - Draft overlay representation exists as an in-memory miniature worktree model,
   including resolver shadow metadata.
 

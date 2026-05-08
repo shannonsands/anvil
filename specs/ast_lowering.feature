@@ -21,3 +21,31 @@ Feature: Core AST lowering
     When the syntax layer lowers the input
     Then the syntax diagnostic code is "ANVIL_SYNTAX_EXPECTED_SYMBOL"
     And the syntax diagnostic phase is "syntax"
+
+  Scenario: Lower a require form
+    Given the agent input "(require [planner.search :as search])"
+    When the syntax layer lowers the input
+    Then the AST contains one expression
+    And the first AST kind is "require"
+    And the first require import module is "planner.search"
+    And the first require import alias is "search"
+    And the first AST prints as "(require [planner.search :as search])"
+
+  Scenario: Resolve require imports during AST lowering
+    Given a fresh module resolver
+    And module "planner.search" exists in package root "planner-tools" at "src/planner/search.anv"
+    And the agent input "(require planner.search)"
+    When the syntax layer lowers the input with the module resolver
+    Then the AST contains one expression
+    And the first AST kind is "require"
+    And the first require import module is "planner.search"
+    And the first require import resolution root kind is "package"
+    And the first require import resolution path is "src/planner/search.anv"
+
+  Scenario: Report require module diagnostics at the module source span
+    Given a fresh module resolver
+    And the agent input "(require missing.module)"
+    When the syntax layer lowers the input with the module resolver
+    Then the module diagnostic code is "ANVIL_MODULE_NOT_FOUND"
+    And the module diagnostic phase is "module"
+    And the module diagnostic primary span starts at line 1 column 10

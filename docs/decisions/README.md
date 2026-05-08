@@ -49,13 +49,15 @@ matter to code structure.
   quote sugar, keywords, nil, booleans, integers, floats, symbols, ordered maps,
   spans, and structured diagnostics.
 - Initial core AST lowering covers literals, symbols, quote, `define`, `if`,
-  `do`, `fn`/`lambda`, calls, vectors, and maps, preserving spans and emitting
-  syntax-phase diagnostics.
+  `do`, `fn`/`lambda`, `require`, calls, vectors, and maps, preserving spans
+  and emitting syntax-phase diagnostics.
 - Initial syntax objects wrap reader datums with deterministic ids, source ids,
   spans, and empty hygiene context fields for future scopes and marks.
 - Initial module resolution is deterministic and explicit across package,
   draft, workspace, locked dependency, vendored dependency, standard-library,
   and host roots, with module-phase diagnostics for missing or ambiguous names.
+- Resolver-backed `require` lowering attaches module diagnostics to the module
+  name span and records resolved import metadata when resolution succeeds.
 - Initial draft overlays are in-memory miniature worktrees with owner, status,
   source overrides, virtual draft paths, diagnostics, and resolver shadow
   metadata.

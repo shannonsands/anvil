@@ -3,7 +3,8 @@ use std::path::Path;
 use anvil_core::{
     AstDiagnostic, DraftOverlay, ModuleDiagnostic, ModuleResolution, ModuleResolver,
     ModuleRootKind, ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxDiagnostic,
-    SyntaxObject, format_ast, format_datums, lower_source, read_repl_input, syntax_from_source,
+    SyntaxObject, format_ast, format_datums, lower_source, lower_source_with_resolver,
+    read_repl_input, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -105,9 +106,27 @@ async fn syntax_layer_lowers_input(world: &mut AnvilWorld) {
         Ok(ast) => {
             world.ast = Some(ast);
             world.ast_diagnostic = None;
+            world.module_diagnostic = None;
         }
         Err(diagnostic) => {
             world.ast = None;
+            world.module_diagnostic = module_diagnostic_clone(&diagnostic);
+            world.ast_diagnostic = Some(diagnostic);
+        }
+    }
+}
+
+#[when("the syntax layer lowers the input with the module resolver")]
+async fn syntax_layer_lowers_input_with_module_resolver(world: &mut AnvilWorld) {
+    match lower_source_with_resolver(&world.source, &world.module_resolver) {
+        Ok(ast) => {
+            world.ast = Some(ast);
+            world.ast_diagnostic = None;
+            world.module_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.ast = None;
+            world.module_diagnostic = module_diagnostic_clone(&diagnostic);
             world.ast_diagnostic = Some(diagnostic);
         }
     }
@@ -322,6 +341,40 @@ async fn first_ast_prints_as(world: &mut AnvilWorld, expected: String) {
     let ast = world.ast.as_ref().expect("AST response");
 
     assert_eq!(format_ast(ast), expected);
+}
+
+#[then(expr = "the first require import module is {string}")]
+async fn first_require_import_module_is(world: &mut AnvilWorld, expected: String) {
+    let json = first_ast_json(world);
+
+    assert_eq!(json["imports"][0]["module"], expected);
+}
+
+#[then(expr = "the first require import alias is {string}")]
+async fn first_require_import_alias_is(world: &mut AnvilWorld, expected: String) {
+    let json = first_ast_json(world);
+
+    assert_eq!(json["imports"][0]["alias"], expected);
+}
+
+#[then(expr = "the first require import resolution root kind is {string}")]
+async fn first_require_import_resolution_root_kind_is(world: &mut AnvilWorld, expected: String) {
+    let json = first_ast_json(world);
+
+    assert_eq!(json["imports"][0]["resolution"]["root_kind"], expected);
+}
+
+#[then(expr = "the first require import resolution path is {string}")]
+async fn first_require_import_resolution_path_is(world: &mut AnvilWorld, expected: String) {
+    let json = first_ast_json(world);
+
+    assert_eq!(json["imports"][0]["resolution"]["path"], expected);
+}
+
+fn first_ast_json(world: &mut AnvilWorld) -> serde_json::Value {
+    let ast = world.ast.as_ref().expect("AST response");
+
+    serde_json::to_value(ast.first().expect("first AST")).expect("AST JSON")
 }
 
 #[then(expr = "the syntax object count is {int}")]
@@ -656,6 +709,18 @@ async fn module_diagnostic_expected_candidates_include(world: &mut AnvilWorld, e
     assert!(diagnostic.expected.contains(&expected));
 }
 
+#[then(expr = "the module diagnostic primary span starts at line {int} column {int}")]
+async fn module_diagnostic_primary_span_starts_at(
+    world: &mut AnvilWorld,
+    expected_line: usize,
+    expected_column: usize,
+) {
+    let diagnostic = world.module_diagnostic.as_ref().expect("module diagnostic");
+
+    assert_eq!(diagnostic.primary_span.start.line, expected_line);
+    assert_eq!(diagnostic.primary_span.start.column, expected_column);
+}
+
 #[then(expr = "the rendered diagnostic contains {string}")]
 async fn rendered_diagnostic_contains(world: &mut AnvilWorld, expected: String) {
     let rendered = world
@@ -686,6 +751,14 @@ fn parse_module_root_kind(value: &str) -> ModuleRootKind {
         "standard-library" => ModuleRootKind::StandardLibrary,
         "host" => ModuleRootKind::Host,
         other => panic!("unknown module root kind {other}"),
+    }
+}
+
+fn module_diagnostic_clone(diagnostic: &AstDiagnostic) -> Option<Box<ModuleDiagnostic>> {
+    if diagnostic.phase == anvil_core::DiagnosticPhase::Module {
+        Some(Box::new(diagnostic.clone()))
+    } else {
+        None
     }
 }
 

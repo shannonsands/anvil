@@ -14,17 +14,20 @@ Implementation-facing decision:
   `phase: syntax`, source id, primary span, labels, expected/actual values,
   suggestions, and code-frame rendering.
 - The initial AST subset is deliberately small: literals, symbols, quote,
-  `define`, `if`, `do`, `fn`/`lambda`, calls, vectors, and maps.
+  `define`, `if`, `do`, `fn`/`lambda`, `require`, calls, vectors, and maps.
 - Lists are forms or calls. Empty lists are rejected for now with a structured
   syntax diagnostic rather than silently becoming `nil`.
 - Function parameters use vector syntax, for example `(fn [x y] (+ x y))`.
   Parameter names must be unique symbols.
+- `require` lowers module symbols and `[module :as alias]` vectors. When a
+  module resolver is supplied, imports include resolution metadata.
 - This AST is not yet the macro expansion representation. Syntax objects and
   macro expansion remain later M2 work.
 
 Current executable surface:
 
-- Core API: `lower_source`, `lower_source_text`, `lower_datums`, and
-  `format_ast`.
+- Core API: `lower_source`, `lower_source_text`, `lower_datums`,
+  `lower_source_with_resolver`, `lower_source_text_with_resolver`,
+  `lower_datums_with_resolver`, and `format_ast`.
 - CLI: `anvil-cli ast [--json] [SOURCE]`.
 - Gherkin: `specs/ast_lowering.feature`.

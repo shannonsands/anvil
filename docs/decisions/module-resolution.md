@@ -26,6 +26,8 @@ Implementation-facing decision:
 - Short names are not guessed. If a short name matches multiple known module
   suffixes, resolution fails with an ambiguity diagnostic and candidate list.
 - Missing and invalid modules use structured `phase: module` diagnostics.
+- Resolver-backed AST lowering can attach module diagnostics to the source span
+  of the module name inside a `require` form.
 - Draft overlays can shadow workspace/dependency/standard/host modules, but not
   the current package in this first precedence model.
 - When a draft wins resolution, `ModuleResolution.shadowed` records the
@@ -35,12 +37,12 @@ Current executable surface:
 
 - Core API: `ModuleResolver`, `ModuleRootKind`, `ModuleSource`,
   `ModuleResolution`, and `ModuleCandidate`.
-- Gherkin: `specs/module_resolution.feature`.
+- Gherkin: `specs/module_resolution.feature` and require-resolution scenarios
+  in `specs/ast_lowering.feature`.
 
 Open implementation dependencies:
 
 - Read `Anvil.toml` and `Anvil.lock`.
 - Index `src/`, workspace members, dependencies, standard-library roots, and
   host module registrations.
-- Attach module source spans from future `require` syntax to diagnostics.
 - Add draft overlay ownership, capability checks, and activation workflow.

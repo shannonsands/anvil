@@ -143,9 +143,18 @@ impl ModuleResolver {
         let request_source = SourceText::new("module-request", module);
         let request_span = request_span(module);
 
+        self.resolve_in_source(module, &request_source, request_span)
+    }
+
+    pub fn resolve_in_source(
+        &self,
+        module: &str,
+        request_source: &SourceText,
+        request_span: SourceSpan,
+    ) -> ModuleResult<ModuleResolution> {
         if !is_valid_module_name(module) {
             return Err(module_error(ModuleDiagnosticSpec {
-                source: &request_source,
+                source: request_source,
                 code: "ANVIL_MODULE_INVALID_NAME",
                 message: format!("invalid module name {module:?}"),
                 span: request_span,
@@ -165,13 +174,13 @@ impl ModuleResolver {
             .collect::<Vec<_>>();
 
         if !exact.is_empty() {
-            return self.resolve_exact(module, exact, &request_source, request_span);
+            return self.resolve_exact(module, exact, request_source, request_span);
         }
 
         let short_candidates = self.module_candidates(module);
         if short_candidates.len() > 1 {
             return Err(module_error(ModuleDiagnosticSpec {
-                source: &request_source,
+                source: request_source,
                 code: "ANVIL_MODULE_AMBIGUOUS",
                 message: format!("module name {module:?} is ambiguous"),
                 span: request_span,
@@ -187,7 +196,7 @@ impl ModuleResolver {
         }
 
         Err(module_error(ModuleDiagnosticSpec {
-            source: &request_source,
+            source: request_source,
             code: "ANVIL_MODULE_NOT_FOUND",
             message: format!("module {module:?} was not found"),
             span: request_span,

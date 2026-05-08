@@ -8,8 +8,9 @@ pub mod source;
 pub mod syntax;
 
 pub use ast::{
-    AstDiagnostic, AstKind, AstLiteral, AstMapEntry, SpannedAst, format_ast, lower_datums,
-    lower_source, lower_source_text,
+    AstDiagnostic, AstKind, AstLiteral, AstMapEntry, RequireImport, SpannedAst, format_ast,
+    lower_datums, lower_datums_with_resolver, lower_source, lower_source_text,
+    lower_source_text_with_resolver, lower_source_with_resolver,
 };
 pub use diagnostic::{
     Diagnostic, DiagnosticCodeFrame, DiagnosticLabel, DiagnosticPhase, DiagnosticSeverity,
