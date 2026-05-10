@@ -33,6 +33,11 @@ Implementation-facing decision:
   seeds the new frame with those captures and then binds parameters over the top,
   so parameters shadow captured locals. Top-level bindings remain dynamic
   per-program globals rather than copied closure captures.
+- Proper tail calls are implemented by compiling tail-position user function
+  calls to explicit tail-call bytecode. The interpreter replaces the active
+  function frame with the callee frame instead of pushing a new one, while
+  preserving the caller's return register. Tail-recursive and mutually
+  tail-recursive programs therefore run at constant VM call depth.
 - The initial primitive table is limited to checked numeric `+`, `-`, `*`, and
   `=` over `Integer` and `Float64`, with exact integer overflow reported as a
   runtime diagnostic.
@@ -46,10 +51,13 @@ Implementation-facing decision:
   compilation with `phase: compile` diagnostics.
 - Runtime diagnostics use `phase: runtime` and preserve the current instruction
   span. The first runtime budget is instruction fuel.
+- `VmOutput` includes `max_call_depth` as an initial execution metric so tests,
+  agents, and hosts can distinguish real tail-call frame replacement from
+  merely returning the right value.
 
 Non-goals for this slice:
 
-- Local `define` semantics, proper tail calls, host calls, modules at execution
+- Local `define` semantics, host calls, modules at execution
   time, resource handles, heap GC, actors, and debugger attachment.
 - Final scalar numeric representation. The bootstrap integer remains `i64`
   because exact `BigInt`/`Ratio` implementation is covered by the numeric
@@ -59,6 +67,6 @@ Open follow-up decisions:
 
 - Concrete persistent collection layout and root-table implementation details
   inside the tracing-GC direction.
-- Tail-call opcode details and how closure frames participate in tail-call
-  replacement.
+- Tail-call interaction with local `define`, debug frame inspection, and module
+  generation replacement.
 - Module bytecode cache serialization and bytecode versioning policy.

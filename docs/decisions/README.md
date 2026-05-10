@@ -83,9 +83,12 @@ matter to code structure.
   vectors, ordered maps, `do`, `if`, top-level `define`, symbol lookup, and
   checked bootstrap numeric primitive calls. It now also supports `fn` values,
   explicit VM call frames, lexical parameter locals, named function calls,
-  direct function literal calls, and returned closures with owned lexical
-  captures, while unsupported executable forms produce compile-phase diagnostics
-  and unbound symbols/non-callable values produce runtime diagnostics.
+  direct function literal calls, returned closures with owned lexical captures,
+  and proper tail calls through tail-call bytecode plus active-frame
+  replacement. `VmOutput` records max call depth so agents and tests can
+  inspect stack behavior, while unsupported executable forms produce
+  compile-phase diagnostics and unbound symbols/non-callable values produce
+  runtime diagnostics.
 - Ordinary language values use tracing GC as the primary memory model. The
   first real collector should be precise, stop-the-world, non-moving, and
   safe-point based, with opaque value references, immutable default values,

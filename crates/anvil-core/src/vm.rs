@@ -85,6 +85,10 @@ pub enum Instruction {
         callee: usize,
         args: Vec<usize>,
     },
+    TailCallFunction {
+        callee: usize,
+        args: Vec<usize>,
+    },
     JumpIfFalse {
         condition: usize,
         target: usize,
@@ -238,6 +242,7 @@ impl Default for VmBudget {
 pub struct VmOutput {
     pub value: Value,
     pub instructions_executed: usize,
+    pub max_call_depth: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -364,6 +369,21 @@ impl<'source> Compiler<'source> {
         Ok(())
     }
 
+    fn compile_tail_expressions(&mut self, expressions: &[SpannedAst], dst: usize) -> VmResult<()> {
+        let Some((tail, prefix)) = expressions.split_last() else {
+            self.load_constant(dst, Value::Nil, self.unit.last_span);
+            return Ok(());
+        };
+
+        for expression in prefix {
+            self.compile_expression(expression, dst)?;
+            self.unit.last_span = expression.span;
+        }
+        self.compile_tail_expression(tail, dst)?;
+        self.unit.last_span = tail.span;
+        Ok(())
+    }
+
     fn compile_expression(&mut self, expression: &SpannedAst, dst: usize) -> VmResult<()> {
         match &expression.kind {
             AstKind::Literal { value } => {
@@ -412,6 +432,21 @@ impl<'source> Compiler<'source> {
         }
     }
 
+    fn compile_tail_expression(&mut self, expression: &SpannedAst, dst: usize) -> VmResult<()> {
+        match &expression.kind {
+            AstKind::Do { expressions } => self.compile_tail_do(expressions, dst, expression.span),
+            AstKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => self.compile_tail_if(condition, then_branch, else_branch, dst, expression.span),
+            AstKind::Call { callee, args } => {
+                self.compile_tail_call(callee, args, dst, expression.span)
+            }
+            _ => self.compile_expression(expression, dst),
+        }
+    }
+
     fn compile_define(
         &mut self,
         name: &str,
@@ -446,7 +481,7 @@ impl<'source> Compiler<'source> {
         params: &[String],
         body: &[SpannedAst],
     ) -> VmResult<FunctionPrototype> {
-        self.compile_expressions(body, RESULT_REGISTER)?;
+        self.compile_tail_expressions(body, RESULT_REGISTER)?;
         self.emit(
             Instruction::Return {
                 src: RESULT_REGISTER,
@@ -474,6 +509,32 @@ impl<'source> Compiler<'source> {
             return self.compile_primitive_call(name, args, dst, span);
         }
 
+        self.compile_function_call(callee, args, Some(dst), span)
+    }
+
+    fn compile_tail_call(
+        &mut self,
+        callee: &SpannedAst,
+        args: &[SpannedAst],
+        dst: usize,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        if let AstKind::Symbol { name } = &callee.kind
+            && is_bootstrap_primitive(name)
+        {
+            return self.compile_primitive_call(name, args, dst, span);
+        }
+
+        self.compile_function_call(callee, args, None, span)
+    }
+
+    fn compile_function_call(
+        &mut self,
+        callee: &SpannedAst,
+        args: &[SpannedAst],
+        dst: Option<usize>,
+        span: SourceSpan,
+    ) -> VmResult<()> {
         let callee_register = self.allocate_register();
         self.compile_expression(callee, callee_register)?;
         let mut arg_registers = Vec::with_capacity(args.len());
@@ -482,14 +543,20 @@ impl<'source> Compiler<'source> {
             self.compile_expression(arg, arg_register)?;
             arg_registers.push(arg_register);
         }
-        self.emit(
-            Instruction::CallFunction {
+
+        let instruction = match dst {
+            Some(dst) => Instruction::CallFunction {
                 dst,
                 callee: callee_register,
                 args: arg_registers,
             },
-            span,
-        );
+            None => Instruction::TailCallFunction {
+                callee: callee_register,
+                args: arg_registers,
+            },
+        };
+
+        self.emit(instruction, span);
         Ok(())
     }
 
@@ -578,6 +645,20 @@ impl<'source> Compiler<'source> {
         self.compile_expressions(expressions, dst)
     }
 
+    fn compile_tail_do(
+        &mut self,
+        expressions: &[SpannedAst],
+        dst: usize,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        if expressions.is_empty() {
+            self.load_constant(dst, Value::Nil, span);
+            return Ok(());
+        }
+
+        self.compile_tail_expressions(expressions, dst)
+    }
+
     fn compile_if(
         &mut self,
         condition: &SpannedAst,
@@ -602,6 +683,36 @@ impl<'source> Compiler<'source> {
         let else_start = self.unit.instructions.len();
         self.patch_jump_target(false_jump, else_start);
         self.compile_expression(else_branch, dst)?;
+
+        let end = self.unit.instructions.len();
+        self.patch_jump_target(end_jump, end);
+        Ok(())
+    }
+
+    fn compile_tail_if(
+        &mut self,
+        condition: &SpannedAst,
+        then_branch: &SpannedAst,
+        else_branch: &SpannedAst,
+        dst: usize,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        let condition_register = self.allocate_register();
+        self.compile_expression(condition, condition_register)?;
+        let false_jump = self.emit(
+            Instruction::JumpIfFalse {
+                condition: condition_register,
+                target: usize::MAX,
+            },
+            span,
+        );
+
+        self.compile_tail_expression(then_branch, dst)?;
+        let end_jump = self.emit(Instruction::Jump { target: usize::MAX }, then_branch.span);
+
+        let else_start = self.unit.instructions.len();
+        self.patch_jump_target(false_jump, else_start);
+        self.compile_tail_expression(else_branch, dst)?;
 
         let end = self.unit.instructions.len();
         self.patch_jump_target(end_jump, end);
@@ -760,6 +871,7 @@ struct Interpreter<'program> {
     frames: Vec<ExecutionFrame>,
     bindings: BTreeMap<String, Value>,
     instructions_executed: usize,
+    max_call_depth: usize,
 }
 
 impl<'program> Interpreter<'program> {
@@ -770,6 +882,7 @@ impl<'program> Interpreter<'program> {
             frames: vec![ExecutionFrame::top_level(program.register_count)],
             bindings: BTreeMap::new(),
             instructions_executed: 0,
+            max_call_depth: 1,
         }
     }
 
@@ -860,6 +973,9 @@ impl<'program> Interpreter<'program> {
             Instruction::CallFunction { dst, callee, args } => {
                 self.call_function(dst, callee, &args, span)
             }
+            Instruction::TailCallFunction { callee, args } => {
+                self.tail_call_function(callee, &args, span)
+            }
             _ => unreachable!("control instructions are handled by execute_instruction"),
         }
     }
@@ -884,6 +1000,7 @@ impl<'program> Interpreter<'program> {
             return Ok(Some(VmOutput {
                 value,
                 instructions_executed: self.instructions_executed,
+                max_call_depth: self.max_call_depth,
             }));
         };
 
@@ -980,6 +1097,38 @@ impl<'program> Interpreter<'program> {
         span: SourceSpan,
     ) -> VmResult<()> {
         let callee = self.register(callee, span)?.clone();
+        let frame = self.build_function_frame(callee, args, dst, span)?;
+
+        self.advance_pc()?;
+        self.frames.push(frame);
+        self.record_call_depth();
+        Ok(())
+    }
+
+    fn tail_call_function(
+        &mut self,
+        callee: usize,
+        args: &[usize],
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        let return_register = self
+            .current_frame()?
+            .return_register
+            .ok_or_else(|| self.tail_call_outside_function(span))?;
+        let callee = self.register(callee, span)?.clone();
+        let frame = self.build_function_frame(callee, args, return_register, span)?;
+
+        *self.current_frame_mut()? = frame;
+        Ok(())
+    }
+
+    fn build_function_frame(
+        &self,
+        callee: Value,
+        args: &[usize],
+        return_register: usize,
+        span: SourceSpan,
+    ) -> VmResult<ExecutionFrame> {
         let Value::Function(function) = callee else {
             return Err(self.not_callable(callee, span));
         };
@@ -990,14 +1139,12 @@ impl<'program> Interpreter<'program> {
         let mut locals = function.captures;
         locals.extend(params.into_iter().zip(arg_values));
 
-        self.advance_pc()?;
-        self.frames.push(ExecutionFrame::function(
+        Ok(ExecutionFrame::function(
             function.function,
             register_count,
             locals,
-            dst,
-        ));
-        Ok(())
+            return_register,
+        ))
     }
 
     fn function_signature(
@@ -1035,6 +1182,17 @@ impl<'program> Interpreter<'program> {
                 "Call a function value, or check that the callee symbol is bound to one."
                     .to_string(),
             ),
+        )
+    }
+
+    fn tail_call_outside_function(&self, span: SourceSpan) -> Box<VmDiagnostic> {
+        self.runtime_error(
+            "ANVIL_RUNTIME_TAIL_CALL_OUTSIDE_FUNCTION",
+            "tail call bytecode can only run from a function frame".to_string(),
+            span,
+            vec!["active function frame".to_string()],
+            Some("top-level frame".to_string()),
+            Some("Report this as a compiler or bytecode construction bug.".to_string()),
         )
     }
 
@@ -1159,6 +1317,10 @@ impl<'program> Interpreter<'program> {
     fn advance_pc(&mut self) -> VmResult<()> {
         self.current_frame_mut()?.pc += 1;
         Ok(())
+    }
+
+    fn record_call_depth(&mut self) {
+        self.max_call_depth = self.max_call_depth.max(self.frames.len());
     }
 
     fn constant(&self, constant: usize, span: SourceSpan) -> VmResult<&Value> {
@@ -1680,6 +1842,156 @@ mod tests {
     }
 
     #[test]
+    fn tail_recursive_calls_replace_the_current_frame() {
+        let program = compile_source(
+            r#"
+            (define loop
+              (fn [n acc]
+                (if (= n 0)
+                  acc
+                  (loop (- n 1) (+ acc 1)))))
+            (loop 1000 0)
+            "#,
+        )
+        .expect("bytecode");
+        let output = Vm::with_budget(VmBudget::with_instruction_fuel(50_000))
+            .run(&program)
+            .expect("VM output");
+
+        assert_eq!(output.value, Value::Integer(1000));
+        assert_eq!(output.max_call_depth, 2);
+        assert!(output.instructions_executed > 1000);
+    }
+
+    #[test]
+    fn mutual_tail_recursion_reuses_the_active_function_frame() {
+        let output = run_source(
+            r#"
+            (define even (fn [n] (if (= n 0) true (odd (- n 1)))))
+            (define odd (fn [n] (if (= n 0) false (even (- n 1)))))
+            (even 999)
+            "#,
+        )
+        .expect("VM output");
+
+        assert_eq!(output.value, Value::Bool(false));
+        assert_eq!(output.max_call_depth, 2);
+    }
+
+    #[test]
+    fn tail_calls_can_target_captured_closure_locals() {
+        let output = run_source(
+            r#"
+            (define make-forwarder (fn [f] (fn [x] (f x))))
+            (define id (fn [x] x))
+            ((make-forwarder id) 42)
+            "#,
+        )
+        .expect("VM output");
+
+        assert_eq!(output.value, Value::Integer(42));
+        assert_eq!(output.max_call_depth, 2);
+    }
+
+    #[test]
+    fn empty_tail_do_returns_nil() {
+        let output = run_source(
+            r#"
+            (define nothing (fn [] (do)))
+            (nothing)
+            "#,
+        )
+        .expect("VM output");
+
+        assert_eq!(output.value, Value::Nil);
+        assert_eq!(output.max_call_depth, 2);
+    }
+
+    #[test]
+    fn tail_do_preserves_prefix_work_and_replaces_on_final_call() {
+        let output = run_source(
+            r#"
+            (define id (fn [x] x))
+            (define final (fn [x] (do (+ x 1) (id x))))
+            (final 42)
+            "#,
+        )
+        .expect("VM output");
+
+        assert_eq!(output.value, Value::Integer(42));
+        assert_eq!(output.max_call_depth, 2);
+    }
+
+    #[test]
+    fn tail_if_true_branch_replaces_the_current_frame() {
+        let output = run_source(
+            r#"
+            (define id (fn [x] x))
+            (define choose (fn [flag] (if flag (id 42) 0)))
+            (choose true)
+            "#,
+        )
+        .expect("VM output");
+
+        assert_eq!(output.value, Value::Integer(42));
+        assert_eq!(output.max_call_depth, 2);
+    }
+
+    #[test]
+    fn tail_calls_direct_function_literals() {
+        let output = run_source(
+            r#"
+            (define outer (fn [] ((fn [] 42))))
+            (outer)
+            "#,
+        )
+        .expect("VM output");
+
+        assert_eq!(output.value, Value::Integer(42));
+        assert_eq!(output.max_call_depth, 2);
+    }
+
+    #[test]
+    fn non_tail_calls_still_push_frames() {
+        let output = run_source(
+            r#"
+            (define id (fn [x] x))
+            (define wrap (fn [x] (+ (id x) 1)))
+            (wrap 41)
+            "#,
+        )
+        .expect("VM output");
+
+        assert_eq!(output.value, Value::Integer(42));
+        assert_eq!(output.max_call_depth, 3);
+    }
+
+    #[test]
+    fn compiles_tail_positions_to_tail_call_bytecode() {
+        let program = compile_source(
+            r#"
+            (define f (fn [x] (do (+ x 1) (if x ((fn [] 1)) ((fn [] 2))))))
+            (f true)
+            "#,
+        )
+        .expect("bytecode");
+
+        let tail_calls = program
+            .functions
+            .iter()
+            .flat_map(|function| &function.instructions)
+            .filter(|instruction| {
+                matches!(
+                    instruction.instruction,
+                    Instruction::TailCallFunction { .. }
+                )
+            })
+            .count();
+
+        assert_eq!(tail_calls, 2);
+    }
+
+    #[test]
     fn displays_all_value_forms_with_escaping() {
         let value = Value::Vector(vec![
             Value::Nil,
@@ -1838,6 +2150,7 @@ mod tests {
 
         assert_eq!(output.value, Value::Integer(2));
         assert!(output.instructions_executed > 0);
+        assert_eq!(output.max_call_depth, 1);
     }
 
     #[test]
@@ -1981,6 +2294,31 @@ mod tests {
             )),
             "ANVIL_RUNTIME_FUNCTION_OUT_OF_BOUNDS"
         );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_tail_call_outside_function() {
+        assert_eq!(
+            runtime_code(bytecode(
+                vec![Instruction::TailCallFunction {
+                    callee: 0,
+                    args: Vec::new(),
+                }],
+                Vec::new(),
+            )),
+            "ANVIL_RUNTIME_TAIL_CALL_OUTSIDE_FUNCTION"
+        );
+    }
+
+    #[test]
+    fn tail_call_diagnostics_match_function_calls() {
+        let not_callable = run_source("((fn [] (42)))").expect_err("runtime diagnostic");
+        assert_eq!(not_callable.code, "ANVIL_RUNTIME_NOT_CALLABLE");
+        assert_eq!(not_callable.actual.as_deref(), Some("integer"));
+
+        let arity = run_source("((fn [f] (f)) (fn [x] x))").expect_err("runtime diagnostic");
+        assert_eq!(arity.code, "ANVIL_RUNTIME_ARITY");
+        assert_eq!(arity.actual.as_deref(), Some("0 argument(s)"));
     }
 
     #[test]

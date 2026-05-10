@@ -925,6 +925,13 @@ async fn vm_value_prints_as(world: &mut AnvilWorld, expected: String) {
     assert_eq!(output.value.to_string(), expected);
 }
 
+#[then(expr = "the VM max call depth is {int}")]
+async fn vm_max_call_depth_is(world: &mut AnvilWorld, expected: usize) {
+    let output = world.vm_output.as_ref().expect("VM output");
+
+    assert_eq!(output.max_call_depth, expected);
+}
+
 #[then(expr = "the syntax object count is {int}")]
 async fn syntax_object_count_is(world: &mut AnvilWorld, expected: usize) {
     let objects = world

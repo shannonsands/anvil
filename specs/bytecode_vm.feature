@@ -64,6 +64,20 @@ Feature: Bytecode VM foundation
     When the bytecode VM runs the input
     Then the VM value prints as "42"
 
+  Scenario: Run tail-recursive functions with constant call depth
+    Given the agent input
+      """
+      (define loop
+        (fn [n acc]
+          (if (= n 0)
+            acc
+            (loop (- n 1) (+ acc 1)))))
+      (loop 1000 0)
+      """
+    When the bytecode VM runs the input with 50000 instruction fuel
+    Then the VM value prints as "1000"
+    And the VM max call depth is 2
+
   Scenario: Report unsupported forms during compilation
     Given the agent input "(require planner.search)"
     When the bytecode VM runs the input

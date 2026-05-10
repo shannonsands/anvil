@@ -80,3 +80,18 @@ impl SourceSpan {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_text_exposes_optional_paths() {
+        let source = SourceText::with_path("pkg:planner", "src/planner.anv", "(define x 1)");
+
+        assert_eq!(source.id(), "pkg:planner");
+        assert_eq!(source.path(), Some("src/planner.anv"));
+        assert_eq!(source.text(), "(define x 1)");
+        assert_eq!(SourceText::repl("42").path(), None);
+    }
+}
