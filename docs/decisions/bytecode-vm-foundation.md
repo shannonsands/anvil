@@ -15,18 +15,24 @@ Implementation-facing decision:
   now run through explicit VM call frames.
 - The bootstrap value representation is an owned immutable `Value` enum for
   nil, booleans, integers, `Float64`, strings, keywords, vectors, and ordered
-  maps, plus lightweight function references. This is a bootstrap surface, not
-  the final heap layout. The final direction is covered by
+  maps, plus function closure values with owned lexical captures. This is a
+  bootstrap surface, not the final heap layout. The final direction is covered by
   `docs/decisions/value-heap-gc.md`.
 - `false` and `nil` are falsey for branch tests; all other values are truthy.
 - The first compiler supports top-level expression sequences, literals,
   vectors, ordered maps, `do`, `if`, top-level `define`, symbol lookup, `fn`
-  values, user-defined function calls, and bootstrap primitive calls.
+  closure values, user-defined function calls, and bootstrap primitive calls.
 - The initial binding model is intentionally top-level and per-program:
   `define` writes a VM binding table, later expressions in the same program can
   read it, and a fresh `run_source` call starts with no user bindings. Function
-  parameters are lexical locals on the active call frame and shadow top-level
-  bindings.
+  parameters are lexical locals on the active call frame and shadow captured
+  locals and top-level bindings.
+- Function values now carry an owned lexical capture map. Loading a function in
+  a non-top-level frame captures the current frame locals, including any
+  transitive outer captures already visible to that frame. Calling a closure
+  seeds the new frame with those captures and then binds parameters over the top,
+  so parameters shadow captured locals. Top-level bindings remain dynamic
+  per-program globals rather than copied closure captures.
 - The initial primitive table is limited to checked numeric `+`, `-`, `*`, and
   `=` over `Integer` and `Float64`, with exact integer overflow reported as a
   runtime diagnostic.
@@ -43,9 +49,8 @@ Implementation-facing decision:
 
 Non-goals for this slice:
 
-- Captured closure environments, local `define` semantics, proper tail calls,
-  host calls, modules at execution time, resource handles, heap GC, actors, and
-  debugger attachment.
+- Local `define` semantics, proper tail calls, host calls, modules at execution
+  time, resource handles, heap GC, actors, and debugger attachment.
 - Final scalar numeric representation. The bootstrap integer remains `i64`
   because exact `BigInt`/`Ratio` implementation is covered by the numeric
   semantics decision and will land after the basic VM loop is real.
@@ -54,5 +59,6 @@ Open follow-up decisions:
 
 - Concrete persistent collection layout and root-table implementation details
   inside the tracing-GC direction.
-- Captured closure representation and tail-call opcode details.
+- Tail-call opcode details and how closure frames participate in tail-call
+  replacement.
 - Module bytecode cache serialization and bytecode versioning policy.

@@ -82,10 +82,10 @@ matter to code structure.
   fuel-accounted. It executes top-level expression sequences, literals,
   vectors, ordered maps, `do`, `if`, top-level `define`, symbol lookup, and
   checked bootstrap numeric primitive calls. It now also supports `fn` values,
-  explicit VM call frames, lexical parameter locals, named function calls, and
-  direct function literal calls, while unsupported executable forms produce
-  compile-phase diagnostics and unbound symbols/non-callable values produce
-  runtime diagnostics.
+  explicit VM call frames, lexical parameter locals, named function calls,
+  direct function literal calls, and returned closures with owned lexical
+  captures, while unsupported executable forms produce compile-phase diagnostics
+  and unbound symbols/non-callable values produce runtime diagnostics.
 - Ordinary language values use tracing GC as the primary memory model. The
   first real collector should be precise, stop-the-world, non-moving, and
   safe-point based, with opaque value references, immutable default values,

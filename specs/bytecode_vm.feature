@@ -54,6 +54,16 @@ Feature: Bytecode VM foundation
     When the bytecode VM runs the input
     Then the VM value prints as "36"
 
+  Scenario: Run returned closures with captured lexical locals
+    Given the agent input
+      """
+      (define make-adder (fn [x] (fn [y] (+ x y))))
+      (define add40 (make-adder 40))
+      (add40 2)
+      """
+    When the bytecode VM runs the input
+    Then the VM value prints as "42"
+
   Scenario: Report unsupported forms during compilation
     Given the agent input "(require planner.search)"
     When the bytecode VM runs the input

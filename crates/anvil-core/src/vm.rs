@@ -145,9 +145,24 @@ pub struct ValueMapEntry {
     pub value: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FunctionValue {
     pub function: usize,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub captures: BTreeMap<String, Value>,
+}
+
+impl FunctionValue {
+    pub fn new(function: usize) -> Self {
+        Self {
+            function,
+            captures: BTreeMap::new(),
+        }
+    }
+
+    fn with_captures(function: usize, captures: BTreeMap<String, Value>) -> Self {
+        Self { function, captures }
+    }
 }
 
 fn write_sequence(
@@ -824,7 +839,12 @@ impl<'program> Interpreter<'program> {
             }
             Instruction::LoadFunction { dst, function } => {
                 self.function(function, span)?;
-                self.set_register(dst, Value::Function(FunctionValue { function }), span)?;
+                let captures = self.current_frame()?.locals.clone();
+                self.set_register(
+                    dst,
+                    Value::Function(FunctionValue::with_captures(function, captures)),
+                    span,
+                )?;
                 self.advance_pc()
             }
             Instruction::CallPrimitive {
@@ -967,7 +987,8 @@ impl<'program> Interpreter<'program> {
         let arg_values = self.register_values(args, span)?;
         let (register_count, params) = self.function_signature(function.function, span)?;
         self.ensure_arity(params.len(), arg_values.len(), span)?;
-        let locals = params.into_iter().zip(arg_values).collect();
+        let mut locals = function.captures;
+        locals.extend(params.into_iter().zip(arg_values));
 
         self.advance_pc()?;
         self.frames.push(ExecutionFrame::function(
@@ -1605,6 +1626,60 @@ mod tests {
     }
 
     #[test]
+    fn returned_closures_capture_lexical_locals() {
+        assert_eq!(
+            run_value(
+                r#"
+                (define make-adder (fn [x] (fn [y] (+ x y))))
+                (define add40 (make-adder 40))
+                (add40 2)
+                "#,
+            ),
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn nested_closures_capture_transitive_lexical_locals() {
+        assert_eq!(
+            run_value(
+                r#"
+                (define make-nested
+                  (fn [x]
+                    (fn [y]
+                      (fn [z] (+ x (+ y z))))))
+                (define add3 ((make-nested 1) 2))
+                (add3 39)
+                "#,
+            ),
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn closure_parameters_shadow_captured_locals() {
+        assert_eq!(
+            run_value("((fn [x] ((fn [x] (+ x 1)) 41)) 100)"),
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn closures_prefer_captured_locals_over_later_top_level_bindings() {
+        assert_eq!(
+            run_value(
+                r#"
+                (define make (fn [x] (fn [] x)))
+                (define f (make 42))
+                (define x 7)
+                (f)
+                "#,
+            ),
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
     fn displays_all_value_forms_with_escaping() {
         let value = Value::Vector(vec![
             Value::Nil,
@@ -1617,12 +1692,19 @@ mod tests {
                 key: Value::Keyword("nested".into()),
                 value: Value::Bool(false),
             }]),
-            Value::Function(FunctionValue { function: 7 }),
+            Value::Function(FunctionValue::new(7)),
         ]);
 
         assert_eq!(
             value.to_string(),
             "[nil true 7 2.5 \"a\\\\b\\\"c\\n\\r\\t\" :ready {:nested false} #<fn:7>]"
+        );
+
+        let mut captures = BTreeMap::new();
+        captures.insert("x".to_string(), Value::Integer(42));
+        assert_eq!(
+            Value::Function(FunctionValue::with_captures(3, captures)).to_string(),
+            "#<fn:3>"
         );
     }
 
@@ -1679,6 +1761,23 @@ mod tests {
         let unbound_callee = run_source("(unknown 1)").expect_err("runtime diagnostic");
         assert_eq!(unbound_callee.code, "ANVIL_RUNTIME_UNBOUND_SYMBOL");
         assert_eq!(unbound_callee.phase, DiagnosticPhase::Runtime);
+    }
+
+    #[test]
+    fn reports_non_callable_value_types() {
+        for (source, actual) in [
+            ("(nil)", "nil"),
+            ("(false)", "bool"),
+            ("(1.5)", "float64"),
+            ("(\"agent\")", "string"),
+            ("(:ready)", "keyword"),
+            ("([1])", "vector"),
+            ("({:ready true})", "map"),
+        ] {
+            let diagnostic = run_source(source).expect_err("runtime diagnostic");
+            assert_eq!(diagnostic.code, "ANVIL_RUNTIME_NOT_CALLABLE");
+            assert_eq!(diagnostic.actual.as_deref(), Some(actual));
+        }
     }
 
     #[test]
@@ -1877,7 +1976,7 @@ mod tests {
                         args: Vec::new(),
                     },
                 ],
-                vec![Value::Function(FunctionValue { function: 9 })],
+                vec![Value::Function(FunctionValue::new(9))],
                 1,
             )),
             "ANVIL_RUNTIME_FUNCTION_OUT_OF_BOUNDS"
