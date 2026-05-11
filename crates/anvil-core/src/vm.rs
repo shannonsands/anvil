@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt};
 use serde::Serialize;
 
 use crate::{
-    ast::{AstKind, AstLiteral, SpannedAst, lower_source_text},
+    ast::{AstKind, AstLiteral, LetBinding, SpannedAst, lower_source_text},
     diagnostic::{Diagnostic, DiagnosticPhase, DiagnosticSpec},
     source::{SourceLocation, SourceSpan, SourceText},
 };
@@ -71,6 +71,12 @@ pub enum Instruction {
         binding: usize,
         src: usize,
     },
+    PushLexicalScope,
+    BindLocal {
+        binding: usize,
+        src: usize,
+    },
+    PopLexicalScope,
     LoadFunction {
         dst: usize,
         function: usize,
@@ -393,6 +399,9 @@ impl<'source> Compiler<'source> {
             AstKind::Vector { items } => self.compile_vector(items, dst, expression.span),
             AstKind::Map { entries } => self.compile_map(entries, dst, expression.span),
             AstKind::Do { expressions } => self.compile_do(expressions, dst, expression.span),
+            AstKind::Let { bindings, body, .. } => {
+                self.compile_let(bindings, body, dst, expression.span)
+            }
             AstKind::Define { name, value } => {
                 self.compile_define(name, value, dst, expression.span)
             }
@@ -418,6 +427,7 @@ impl<'source> Compiler<'source> {
                     "map".to_string(),
                     "do".to_string(),
                     "if".to_string(),
+                    "let".to_string(),
                     "define".to_string(),
                     "fn".to_string(),
                     "symbol".to_string(),
@@ -435,6 +445,9 @@ impl<'source> Compiler<'source> {
     fn compile_tail_expression(&mut self, expression: &SpannedAst, dst: usize) -> VmResult<()> {
         match &expression.kind {
             AstKind::Do { expressions } => self.compile_tail_do(expressions, dst, expression.span),
+            AstKind::Let { bindings, body, .. } => {
+                self.compile_tail_let(bindings, body, dst, expression.span)
+            }
             AstKind::If {
                 condition,
                 then_branch,
@@ -645,6 +658,20 @@ impl<'source> Compiler<'source> {
         self.compile_expressions(expressions, dst)
     }
 
+    fn compile_let(
+        &mut self,
+        bindings: &[LetBinding],
+        body: &[SpannedAst],
+        dst: usize,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        self.emit(Instruction::PushLexicalScope, span);
+        self.compile_let_bindings(bindings)?;
+        self.compile_expressions(body, dst)?;
+        self.emit(Instruction::PopLexicalScope, span);
+        Ok(())
+    }
+
     fn compile_tail_do(
         &mut self,
         expressions: &[SpannedAst],
@@ -657,6 +684,36 @@ impl<'source> Compiler<'source> {
         }
 
         self.compile_tail_expressions(expressions, dst)
+    }
+
+    fn compile_tail_let(
+        &mut self,
+        bindings: &[LetBinding],
+        body: &[SpannedAst],
+        dst: usize,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        self.emit(Instruction::PushLexicalScope, span);
+        self.compile_let_bindings(bindings)?;
+        self.compile_tail_expressions(body, dst)?;
+        self.emit(Instruction::PopLexicalScope, span);
+        Ok(())
+    }
+
+    fn compile_let_bindings(&mut self, bindings: &[LetBinding]) -> VmResult<()> {
+        for binding in bindings {
+            let value_register = self.allocate_register();
+            self.compile_expression(&binding.value, value_register)?;
+            let binding_index = self.intern_binding(&binding.name);
+            self.emit(
+                Instruction::BindLocal {
+                    binding: binding_index,
+                    src: value_register,
+                },
+                binding.span,
+            );
+        }
+        Ok(())
     }
 
     fn compile_if(
@@ -815,6 +872,7 @@ fn ast_kind_name(kind: &AstKind) -> &'static str {
         AstKind::Define { .. } => "define",
         AstKind::If { .. } => "if",
         AstKind::Do { .. } => "do",
+        AstKind::Let { .. } => "let",
         AstKind::Fn { .. } => "fn",
         AstKind::Require { .. } => "require",
         AstKind::Call { .. } => "call",
@@ -834,8 +892,15 @@ struct ExecutionFrame {
     code: FrameCode,
     registers: Vec<Value>,
     locals: BTreeMap<String, Value>,
+    local_scopes: Vec<Vec<LocalRestore>>,
     pc: usize,
     return_register: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct LocalRestore {
+    name: String,
+    previous: Option<Value>,
 }
 
 impl ExecutionFrame {
@@ -844,6 +909,7 @@ impl ExecutionFrame {
             code: FrameCode::TopLevel,
             registers: vec![Value::Nil; register_count],
             locals: BTreeMap::new(),
+            local_scopes: Vec::new(),
             pc: 0,
             return_register: None,
         }
@@ -859,6 +925,7 @@ impl ExecutionFrame {
             code: FrameCode::Function(function),
             registers: vec![Value::Nil; register_count],
             locals,
+            local_scopes: Vec::new(),
             pc: 0,
             return_register: Some(return_register),
         }
@@ -948,6 +1015,18 @@ impl<'program> Interpreter<'program> {
             }
             Instruction::DefineBinding { binding, src } => {
                 self.define_binding(binding, src, span)?;
+                self.advance_pc()
+            }
+            Instruction::PushLexicalScope => {
+                self.push_lexical_scope()?;
+                self.advance_pc()
+            }
+            Instruction::BindLocal { binding, src } => {
+                self.bind_local(binding, src, span)?;
+                self.advance_pc()
+            }
+            Instruction::PopLexicalScope => {
+                self.pop_lexical_scope(span)?;
                 self.advance_pc()
             }
             Instruction::LoadFunction { dst, function } => {
@@ -1049,6 +1128,66 @@ impl<'program> Interpreter<'program> {
         let name = self.binding_name(binding, span)?.to_string();
         let value = self.register(src, span)?.clone();
         self.bindings.insert(name, value);
+        Ok(())
+    }
+
+    fn push_lexical_scope(&mut self) -> VmResult<()> {
+        self.current_frame_mut()?.local_scopes.push(Vec::new());
+        Ok(())
+    }
+
+    fn bind_local(&mut self, binding: usize, src: usize, span: SourceSpan) -> VmResult<()> {
+        let name = self.binding_name(binding, span)?.to_string();
+        let value = self.register(src, span)?.clone();
+        if self.current_frame()?.local_scopes.is_empty() {
+            return Err(self.local_scope_missing(span));
+        }
+
+        let frame = self.current_frame_mut()?;
+        let should_save = frame
+            .local_scopes
+            .last()
+            .expect("lexical scope existence checked before mutation")
+            .iter()
+            .all(|restore| restore.name != name);
+        let previous = should_save
+            .then(|| frame.locals.get(&name).cloned())
+            .flatten();
+        if should_save {
+            frame
+                .local_scopes
+                .last_mut()
+                .expect("lexical scope existence checked before mutation")
+                .push(LocalRestore {
+                    name: name.clone(),
+                    previous,
+                });
+        };
+        frame.locals.insert(name, value);
+        Ok(())
+    }
+
+    fn pop_lexical_scope(&mut self, span: SourceSpan) -> VmResult<()> {
+        if self.current_frame()?.local_scopes.is_empty() {
+            return Err(self.local_scope_underflow(span));
+        }
+
+        let frame = self.current_frame_mut()?;
+        let scope = frame
+            .local_scopes
+            .pop()
+            .expect("lexical scope existence checked before mutation");
+
+        for restore in scope.into_iter().rev() {
+            match restore.previous {
+                Some(value) => {
+                    frame.locals.insert(restore.name, value);
+                }
+                None => {
+                    frame.locals.remove(&restore.name);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1192,6 +1331,28 @@ impl<'program> Interpreter<'program> {
             span,
             vec!["active function frame".to_string()],
             Some("top-level frame".to_string()),
+            Some("Report this as a compiler or bytecode construction bug.".to_string()),
+        )
+    }
+
+    fn local_scope_missing(&self, span: SourceSpan) -> Box<VmDiagnostic> {
+        self.runtime_error(
+            "ANVIL_RUNTIME_LOCAL_SCOPE_MISSING",
+            "local binding requires an active lexical scope".to_string(),
+            span,
+            vec!["active lexical scope".to_string()],
+            Some("no lexical scope".to_string()),
+            Some("Report this as a compiler or bytecode construction bug.".to_string()),
+        )
+    }
+
+    fn local_scope_underflow(&self, span: SourceSpan) -> Box<VmDiagnostic> {
+        self.runtime_error(
+            "ANVIL_RUNTIME_LOCAL_SCOPE_UNDERFLOW",
+            "cannot pop lexical scope because none is active".to_string(),
+            span,
+            vec!["active lexical scope".to_string()],
+            Some("no lexical scope".to_string()),
             Some("Report this as a compiler or bytecode construction bug.".to_string()),
         )
     }
@@ -1842,6 +2003,81 @@ mod tests {
     }
 
     #[test]
+    fn runs_lexical_let_bindings() {
+        assert_eq!(run_value("(let [x 40 y (+ x 2)] y)"), Value::Integer(42));
+        assert_eq!(run_value("(let* [x 40 y (+ x 2)] y)"), Value::Integer(42));
+    }
+
+    #[test]
+    fn let_bindings_shadow_without_leaking() {
+        assert_eq!(
+            run_value("(define x 10) (do (let [x 40 y (+ x 2)] y) x)"),
+            Value::Integer(10)
+        );
+
+        let diagnostic = run_source("(do (let [x 42] x) x)").expect_err("runtime diagnostic");
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_UNBOUND_SYMBOL");
+        assert_eq!(diagnostic.actual.as_deref(), Some("symbol x"));
+    }
+
+    #[test]
+    fn closures_capture_lexical_let_bindings() {
+        assert_eq!(
+            run_value(
+                r#"
+                (define add40 (let [x 40] (fn [y] (+ x y))))
+                (add40 2)
+                "#,
+            ),
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn tail_calls_inside_let_preserve_constant_depth() {
+        let output = run_source(
+            r#"
+            (define loop
+              (fn [n acc]
+                (let [done (= n 0)]
+                  (if done
+                    acc
+                    (loop (- n 1) (+ acc 1))))))
+            (loop 1000 0)
+            "#,
+        )
+        .expect("VM output");
+
+        assert_eq!(output.value, Value::Integer(1000));
+        assert_eq!(output.max_call_depth, 2);
+    }
+
+    #[test]
+    fn compiles_tail_let_final_calls_to_tail_call_bytecode() {
+        let program = compile_source(
+            r#"
+            (define id (fn [x] x))
+            (define f (fn [x] (let [y x] (id y))))
+            (f 42)
+            "#,
+        )
+        .expect("bytecode");
+        let tail_calls = program
+            .functions
+            .iter()
+            .flat_map(|function| &function.instructions)
+            .filter(|instruction| {
+                matches!(
+                    instruction.instruction,
+                    Instruction::TailCallFunction { .. }
+                )
+            })
+            .count();
+
+        assert_eq!(tail_calls, 1);
+    }
+
+    #[test]
     fn tail_recursive_calls_replace_the_current_frame() {
         let program = compile_source(
             r#"
@@ -2307,6 +2543,21 @@ mod tests {
                 Vec::new(),
             )),
             "ANVIL_RUNTIME_TAIL_CALL_OUTSIDE_FUNCTION"
+        );
+    }
+
+    #[test]
+    fn malformed_bytecode_reports_lexical_scope_errors() {
+        assert_eq!(
+            runtime_code(bytecode_with_bindings(
+                vec![Instruction::BindLocal { binding: 0, src: 0 }],
+                vec!["x".to_string()],
+            )),
+            "ANVIL_RUNTIME_LOCAL_SCOPE_MISSING"
+        );
+        assert_eq!(
+            runtime_code(bytecode(vec![Instruction::PopLexicalScope], Vec::new())),
+            "ANVIL_RUNTIME_LOCAL_SCOPE_UNDERFLOW"
         );
     }
 

@@ -20,8 +20,9 @@ Implementation-facing decision:
   `docs/decisions/value-heap-gc.md`.
 - `false` and `nil` are falsey for branch tests; all other values are truthy.
 - The first compiler supports top-level expression sequences, literals,
-  vectors, ordered maps, `do`, `if`, top-level `define`, symbol lookup, `fn`
-  closure values, user-defined function calls, and bootstrap primitive calls.
+  vectors, ordered maps, `do`, `if`, sequential lexical `let`/`let*`, top-level
+  `define`, symbol lookup, `fn` closure values, user-defined function calls,
+  and bootstrap primitive calls.
 - The initial binding model is intentionally top-level and per-program:
   `define` writes a VM binding table, later expressions in the same program can
   read it, and a fresh `run_source` call starts with no user bindings. Function
@@ -33,6 +34,11 @@ Implementation-facing decision:
   seeds the new frame with those captures and then binds parameters over the top,
   so parameters shadow captured locals. Top-level bindings remain dynamic
   per-program globals rather than copied closure captures.
+- Sequential lexical `let`/`let*` bindings use a Clojure-shaped binding vector:
+  `(let [name value ...] body...)`. Each binding initializer can see earlier
+  bindings from the same vector. The VM emits explicit lexical-scope
+  push/bind/pop bytecode so local bindings can shadow captured locals,
+  parameters, or top-level bindings without leaking after the body exits.
 - Proper tail calls are implemented by compiling tail-position user function
   calls to explicit tail-call bytecode. The interpreter replaces the active
   function frame with the callee frame instead of pushing a new one, while
@@ -57,8 +63,8 @@ Implementation-facing decision:
 
 Non-goals for this slice:
 
-- Local `define` semantics, host calls, modules at execution
-  time, resource handles, heap GC, actors, and debugger attachment.
+- Local `define` semantics, host calls, modules at execution time, resource
+  handles, heap GC, actors, and debugger attachment.
 - Final scalar numeric representation. The bootstrap integer remains `i64`
   because exact `BigInt`/`Ratio` implementation is covered by the numeric
   semantics decision and will land after the basic VM loop is real.

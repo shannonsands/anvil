@@ -64,6 +64,26 @@ Feature: Bytecode VM foundation
     When the bytecode VM runs the input
     Then the VM value prints as "42"
 
+  Scenario: Run lexical let bindings without leaking
+    Given the agent input
+      """
+      (define x 10)
+      (do
+        (let [x 40 y (+ x 2)] y)
+        x)
+      """
+    When the bytecode VM runs the input
+    Then the VM value prints as "10"
+
+  Scenario: Run closures captured from lexical let bindings
+    Given the agent input
+      """
+      (define add40 (let [x 40] (fn [y] (+ x y))))
+      (add40 2)
+      """
+    When the bytecode VM runs the input
+    Then the VM value prints as "42"
+
   Scenario: Run tail-recursive functions with constant call depth
     Given the agent input
       """

@@ -65,8 +65,10 @@ The first executable acceptance harness is intentionally tiny but real:
   `[workspace].members`, root-package precedence over workspace members, missing
   member manifests, and ambiguous workspace module diagnostics.
 - `bytecode_vm.feature` covers the first executable VM behavior: running
-  literals, expression sequences, `if`, vectors, maps, compile diagnostics for
-  unsupported forms, and runtime diagnostics for fuel exhaustion.
+  literals, expression sequences, `if`, vectors, maps, top-level bindings,
+  function calls, closures, proper tail calls, lexical `let` bindings, compile
+  diagnostics for unsupported forms, and runtime diagnostics for fuel
+  exhaustion.
 - `resource_handles.feature` covers the first resource-handle substrate:
   typed open, redacted display, use-site missing-capability denials, narrowed
   delegation, rejected widening, and revocation.

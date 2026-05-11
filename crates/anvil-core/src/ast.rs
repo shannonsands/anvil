@@ -49,6 +49,11 @@ pub enum AstKind {
     Do {
         expressions: Vec<SpannedAst>,
     },
+    Let {
+        form: LetForm,
+        bindings: Vec<LetBinding>,
+        body: Vec<SpannedAst>,
+    },
     Fn {
         params: Vec<String>,
         body: Vec<SpannedAst>,
@@ -81,6 +86,11 @@ impl fmt::Display for AstKind {
                 else_branch,
             } => write!(f, "(if {condition} {then_branch} {else_branch})"),
             Self::Do { expressions } => write_sequence(f, "do", expressions),
+            Self::Let {
+                form,
+                bindings,
+                body,
+            } => write_let(f, *form, bindings, body),
             Self::Fn { params, body } => write_fn(f, params, body),
             Self::Require { imports } => write_sequence(f, "require", imports),
             Self::Call { callee, args } => write_call(f, callee, args),
@@ -88,6 +98,26 @@ impl fmt::Display for AstKind {
             Self::Map { entries } => write_map(f, entries),
         }
     }
+}
+
+fn write_let(
+    f: &mut fmt::Formatter<'_>,
+    form: LetForm,
+    bindings: &[LetBinding],
+    body: &[SpannedAst],
+) -> fmt::Result {
+    write!(f, "({form} [")?;
+    let mut separator = "";
+    for binding in bindings {
+        f.write_str(separator)?;
+        write!(f, "{} {}", binding.name, binding.value)?;
+        separator = " ";
+    }
+    f.write_str("]")?;
+    for expression in body {
+        write!(f, " {expression}")?;
+    }
+    f.write_str(")")
 }
 
 fn write_fn(f: &mut fmt::Formatter<'_>, params: &[String], body: &[SpannedAst]) -> fmt::Result {
@@ -174,6 +204,35 @@ impl fmt::Display for AstLiteral {
 pub struct AstMapEntry {
     pub key: SpannedAst,
     pub value: SpannedAst,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LetForm {
+    Let,
+    LetStar,
+}
+
+impl LetForm {
+    fn source_name(self) -> &'static str {
+        match self {
+            Self::Let => "let",
+            Self::LetStar => "let*",
+        }
+    }
+}
+
+impl fmt::Display for LetForm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.source_name())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LetBinding {
+    pub name: String,
+    pub value: SpannedAst,
+    pub span: SourceSpan,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -337,6 +396,8 @@ fn lower_list(
         Datum::Symbol(name) if name == "define" => lower_define(context, items),
         Datum::Symbol(name) if name == "if" => lower_if(context, items),
         Datum::Symbol(name) if name == "do" => lower_do(context, items),
+        Datum::Symbol(name) if name == "let" => lower_let(context, items, LetForm::Let),
+        Datum::Symbol(name) if name == "let*" => lower_let(context, items, LetForm::LetStar),
         Datum::Symbol(name) if matches!(name.as_str(), "fn" | "lambda") => lower_fn(context, items),
         Datum::Symbol(name) if name == "require" => lower_require(context, items),
         _ => lower_call(context, items),
@@ -373,6 +434,28 @@ fn lower_if(context: &LoweringContext<'_>, items: &[SpannedDatum]) -> AstResult<
 fn lower_do(context: &LoweringContext<'_>, items: &[SpannedDatum]) -> AstResult<AstKind> {
     Ok(AstKind::Do {
         expressions: lower_datums_in_context(context, &items[1..])?,
+    })
+}
+
+fn lower_let(
+    context: &LoweringContext<'_>,
+    items: &[SpannedDatum],
+    form: LetForm,
+) -> AstResult<AstKind> {
+    require_at_least_operands(
+        context.source,
+        form.source_name(),
+        items,
+        2,
+        "binding vector and body",
+    )?;
+    let bindings = expect_let_bindings(context, &items[1])?;
+    let body = lower_datums_in_context(context, &items[2..])?;
+
+    Ok(AstKind::Let {
+        form,
+        bindings,
+        body,
     })
 }
 
@@ -554,6 +637,58 @@ fn expect_symbol(
     }
 }
 
+fn expect_let_bindings(
+    context: &LoweringContext<'_>,
+    datum: &SpannedDatum,
+) -> AstResult<Vec<LetBinding>> {
+    let Datum::Vector(items) = &datum.datum else {
+        return Err(syntax_error(SyntaxDiagnosticSpec {
+            source: context.source,
+            code: "ANVIL_SYNTAX_EXPECTED_VECTOR",
+            message: "let expects bindings in a vector".to_string(),
+            span: datum.span,
+            expected: vec!["binding vector".to_string()],
+            actual: Some(datum_description(&datum.datum)),
+            suggestion: Some("Wrap lexical bindings in square brackets.".to_string()),
+        }));
+    };
+    if items.len() % 2 != 0 {
+        return Err(syntax_error(SyntaxDiagnosticSpec {
+            source: context.source,
+            code: "ANVIL_SYNTAX_BINDING_VECTOR",
+            message: "let binding vector must contain name/value pairs".to_string(),
+            span: datum.span,
+            expected: vec!["even number of binding forms".to_string()],
+            actual: Some(format!("{} form(s)", items.len())),
+            suggestion: Some("Use [name value] pairs in the binding vector.".to_string()),
+        }));
+    }
+
+    let mut seen = HashSet::new();
+    let mut bindings = Vec::with_capacity(items.len() / 2);
+    for pair in items.chunks_exact(2) {
+        let name = expect_symbol(context.source, &pair[0], "lexical binding name")?;
+        if !seen.insert(name.clone()) {
+            return Err(syntax_error(SyntaxDiagnosticSpec {
+                source: context.source,
+                code: "ANVIL_SYNTAX_DUPLICATE_BINDING",
+                message: format!("duplicate lexical binding {name}"),
+                span: pair[0].span,
+                expected: vec!["unique lexical binding names".to_string()],
+                actual: Some(name),
+                suggestion: Some("Rename one of the duplicate lexical bindings.".to_string()),
+            }));
+        }
+        bindings.push(LetBinding {
+            name,
+            value: lower_datum(context, &pair[1])?,
+            span: pair[0].span,
+        });
+    }
+
+    Ok(bindings)
+}
+
 fn expect_param_vector(source: &SourceText, datum: &SpannedDatum) -> AstResult<Vec<String>> {
     let Datum::Vector(params) = &datum.datum else {
         return Err(syntax_error(SyntaxDiagnosticSpec {
@@ -671,6 +806,18 @@ mod tests {
     }
 
     #[test]
+    fn lowers_let_forms() {
+        let ast = lower_source("(let [x 1 y (+ x 1)] y)").unwrap();
+
+        assert_eq!(format_ast(&ast), "(let [x 1 y (+ x 1)] y)");
+        assert!(matches!(ast[0].kind, AstKind::Let { .. }));
+
+        let ast = lower_source("(let* [x 1] x)").unwrap();
+
+        assert_eq!(format_ast(&ast), "(let* [x 1] x)");
+    }
+
+    #[test]
     fn rejects_bad_if_arity() {
         let diagnostic = lower_source("(if true 1)").unwrap_err();
 
@@ -753,5 +900,18 @@ mod tests {
 
         assert_eq!(diagnostic.code, "ANVIL_SYNTAX_DUPLICATE_BINDING");
         assert_eq!(diagnostic.primary_span.start.column, 8);
+    }
+
+    #[test]
+    fn rejects_bad_let_binding_vectors() {
+        let diagnostic = lower_source("(let [x] x)").unwrap_err();
+
+        assert_eq!(diagnostic.code, "ANVIL_SYNTAX_BINDING_VECTOR");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Syntax);
+
+        let diagnostic = lower_source("(let [x 1 x 2] x)").unwrap_err();
+
+        assert_eq!(diagnostic.code, "ANVIL_SYNTAX_DUPLICATE_BINDING");
+        assert_eq!(diagnostic.primary_span.start.column, 11);
     }
 }

@@ -16,10 +16,23 @@ Feature: Core AST lowering
     Then the JSON status is "ast"
     And the JSON first AST kind is "fn"
 
+  Scenario: Lower a lexical let form
+    Given the agent input "(let [x 1 y (+ x 1)] y)"
+    When the syntax layer lowers the input
+    Then the AST contains one expression
+    And the first AST kind is "let"
+    And the first AST prints as "(let [x 1 y (+ x 1)] y)"
+
   Scenario: Report an invalid definition binding
     Given the agent input "(define 42 true)"
     When the syntax layer lowers the input
     Then the syntax diagnostic code is "ANVIL_SYNTAX_EXPECTED_SYMBOL"
+    And the syntax diagnostic phase is "syntax"
+
+  Scenario: Report invalid lexical let bindings
+    Given the agent input "(let [x] x)"
+    When the syntax layer lowers the input
+    Then the syntax diagnostic code is "ANVIL_SYNTAX_BINDING_VECTOR"
     And the syntax diagnostic phase is "syntax"
 
   Scenario: Lower a require form
