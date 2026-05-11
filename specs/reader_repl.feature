@@ -48,6 +48,13 @@ Feature: Reader-backed REPL
     Then the response contains one datum
     And the first datum prints as "(define answer 42)"
 
+  Scenario: Evaluate across an interactive REPL session
+    Given an empty REPL session
+    When the REPL session reads the line "(define answer 42)"
+    Then the REPL evaluation value prints as "42"
+    When the REPL session reads the line "answer"
+    Then the REPL evaluation value prints as "42"
+
   Scenario: Serialize pending interactive input for agents
     Given an empty REPL session
     When the REPL session reads the line "(define answer"

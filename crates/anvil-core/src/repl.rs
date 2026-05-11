@@ -1,11 +1,17 @@
-use crate::reader::{ReaderDiagnostic, SpannedDatum, read_source};
+use crate::{
+    diagnostic::Diagnostic,
+    reader::{ReaderDiagnostic, SpannedDatum, read_source},
+    vm::{Value, VmDiagnostic, VmOutput, VmSession},
+};
 
 use serde::{Serialize, ser::SerializeStruct};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum EvaluationStatus {
     NotImplemented,
+    Value { output: VmOutput },
+    Error { diagnostic: Box<VmDiagnostic> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -80,8 +86,15 @@ impl ReplResponse {
 
     pub fn diagnostic(&self) -> Option<&ReaderDiagnostic> {
         match self {
-            Self::Read { .. } => None,
+            Self::Read { evaluation, .. } => evaluation.diagnostic(),
             Self::Error { diagnostic } => Some(diagnostic.as_ref()),
+        }
+    }
+
+    pub fn evaluation(&self) -> Option<&EvaluationStatus> {
+        match self {
+            Self::Read { evaluation, .. } => Some(evaluation),
+            Self::Error { .. } => None,
         }
     }
 }
@@ -91,6 +104,7 @@ pub struct ReplSession {
     buffer: String,
     pending: Option<ReaderDiagnostic>,
     buffered_lines: usize,
+    vm: VmSession,
 }
 
 impl ReplSession {
@@ -104,13 +118,14 @@ impl ReplSession {
 
         match read_source(&self.buffer) {
             Ok(datums) => {
+                let evaluation = match self.vm.eval_source(&self.buffer) {
+                    Ok(output) => EvaluationStatus::Value { output },
+                    Err(diagnostic) => EvaluationStatus::Error { diagnostic },
+                };
                 self.buffer.clear();
                 self.pending = None;
                 self.buffered_lines = 0;
-                ReplInteraction::Complete(ReplResponse::Read {
-                    datums,
-                    evaluation: EvaluationStatus::NotImplemented,
-                })
+                ReplInteraction::Complete(ReplResponse::Read { datums, evaluation })
             }
             Err(diagnostic) => {
                 if diagnostic.is_incomplete_input() {
@@ -138,6 +153,14 @@ impl ReplSession {
     pub fn is_pending(&self) -> bool {
         self.pending.is_some()
     }
+
+    pub fn vm(&self) -> &VmSession {
+        &self.vm
+    }
+
+    pub fn reset_vm(&mut self) {
+        self.vm.reset();
+    }
 }
 
 pub fn read_repl_input(source: &str) -> ReplResponse {
@@ -147,6 +170,22 @@ pub fn read_repl_input(source: &str) -> ReplResponse {
             evaluation: EvaluationStatus::NotImplemented,
         },
         Err(diagnostic) => ReplResponse::Error { diagnostic },
+    }
+}
+
+impl EvaluationStatus {
+    pub fn diagnostic(&self) -> Option<&Diagnostic> {
+        match self {
+            Self::Error { diagnostic } => Some(diagnostic.as_ref()),
+            Self::NotImplemented | Self::Value { .. } => None,
+        }
+    }
+
+    pub fn value(&self) -> Option<&Value> {
+        match self {
+            Self::Value { output } => Some(&output.value),
+            Self::NotImplemented | Self::Error { .. } => None,
+        }
     }
 }
 
@@ -173,7 +212,26 @@ mod tests {
         let response = interaction.response().expect("complete response");
 
         assert_eq!(response.datums()[0].to_string(), "(define answer 42)");
+        assert_eq!(
+            response.evaluation().and_then(EvaluationStatus::value),
+            Some(&Value::Integer(42))
+        );
         assert!(!session.is_pending());
+    }
+
+    #[test]
+    fn session_evaluates_against_persistent_vm_state() {
+        let mut session = ReplSession::new();
+
+        session.push_line("(define answer 42)\n");
+        let interaction = session.push_line("answer\n");
+        let response = interaction.response().expect("complete response");
+
+        assert_eq!(
+            response.evaluation().and_then(EvaluationStatus::value),
+            Some(&Value::Integer(42))
+        );
+        assert_eq!(session.vm().binding("answer"), Some(&Value::Integer(42)));
     }
 
     #[test]

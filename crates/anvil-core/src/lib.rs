@@ -38,7 +38,7 @@ pub use project::{
 pub use reader::{
     Datum, ReaderDiagnostic, SpannedDatum, format_datums, read_source, read_source_text,
 };
-pub use repl::{ReplInteraction, ReplResponse, ReplSession, read_repl_input};
+pub use repl::{EvaluationStatus, ReplInteraction, ReplResponse, ReplSession, read_repl_input};
 pub use resource::{
     HandleDelegationPolicy, HandleDisplayPolicy, HandleEntry, HandleRevocationState, HandleTable,
     ResourceAdapter, ResourceAdapterFailure, ResourceAdapterOutcome, ResourceAdapterRequest,
@@ -57,8 +57,8 @@ pub use syntax::{
 };
 pub use vm::{
     BytecodeInstruction, BytecodeProgram, Instruction, MapRegisterEntry, Value, ValueMapEntry, Vm,
-    VmBudget, VmDiagnostic, VmOutput, compile_ast, compile_source, compile_source_text, run_source,
-    run_source_text,
+    VmBudget, VmDiagnostic, VmOutput, VmSession, compile_ast, compile_source, compile_source_text,
+    run_source, run_source_text,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

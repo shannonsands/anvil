@@ -76,7 +76,7 @@ fn read_command_reads_stdin_as_json() {
     assert!(output.status.success());
     let stdout = stdout_text(&output);
     assert!(stdout.contains(r#""status":"read""#));
-    assert!(stdout.contains(r#""evaluation":"not_implemented""#));
+    assert!(stdout.contains(r#""evaluation":{"status":"not_implemented"}"#));
 }
 
 #[test]
@@ -118,12 +118,22 @@ fn run_command_reports_compile_diagnostics_as_json() {
 
 #[test]
 fn repl_reads_noninteractive_multiline_input() {
-    let output = run_anvil(&["repl"], "(define answer\n42)\n");
+    let output = run_anvil(&["repl"], "(define answer\n42)\nanswer\n");
 
     assert!(output.status.success());
     let stdout = stdout_text(&output);
-    assert!(stdout.contains("ok (define answer 42)"));
+    assert_eq!(stdout.matches("value 42").count(), 2);
     assert!(!stdout.contains("anvil>"));
+}
+
+#[test]
+fn repl_preserves_state_in_json_mode() {
+    let output = run_anvil(&["repl", "--json"], "(define answer 42)\nanswer\n");
+
+    assert!(output.status.success());
+    let stdout = stdout_text(&output);
+    assert_eq!(stdout.matches(r#""status":"value""#).count(), 2);
+    assert!(stdout.contains(r#""value":{"kind":"integer","value":42}"#));
 }
 
 #[test]

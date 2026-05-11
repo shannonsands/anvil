@@ -14,9 +14,10 @@ use anvil_core::{
     ResourceDelegationRequest, ResourceEffect, ResourceEffectRecord, ResourceEntry, ResourceError,
     ResourceExecutionMode, ResourceOpenRequest, ResourceOperationAuthorization,
     ResourceOperationOutcome, ResourceOperationRequest, ResourceRegistry, SpannedAst,
-    SyntaxDiagnostic, SyntaxObject, Value, Vm, VmBudget, VmDiagnostic, VmOutput, compile_source,
-    format_ast, format_datums, load_package_snapshot, load_workspace_snapshot, lower_source,
-    lower_source_with_resolver, parse_manifest, read_repl_input, run_source, syntax_from_source,
+    SyntaxDiagnostic, SyntaxObject, Value, Vm, VmBudget, VmDiagnostic, VmOutput, VmSession,
+    compile_source, format_ast, format_datums, load_package_snapshot, load_workspace_snapshot,
+    lower_source, lower_source_with_resolver, parse_manifest, read_repl_input, run_source,
+    syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -43,6 +44,7 @@ struct AnvilWorld {
     package_sources: Vec<PackageSourceFile>,
     filesystem_package_root: Option<PathBuf>,
     project_diagnostic: Option<Box<ProjectDiagnostic>>,
+    vm_session: VmSession,
     vm_output: Option<VmOutput>,
     vm_diagnostic: Option<Box<VmDiagnostic>>,
     resource_registry: ResourceRegistry,
@@ -540,6 +542,58 @@ async fn bytecode_vm_runs_input(world: &mut AnvilWorld) {
     }
 }
 
+#[given("a fresh VM session")]
+async fn fresh_vm_session(world: &mut AnvilWorld) {
+    world.vm_session = VmSession::new();
+    world.vm_output = None;
+    world.vm_diagnostic = None;
+}
+
+#[when("the VM session evaluates the input")]
+async fn vm_session_evaluates_input(world: &mut AnvilWorld) {
+    match world.vm_session.eval_source(&world.source) {
+        Ok(output) => {
+            world.vm_output = Some(output);
+            world.vm_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.vm_output = None;
+            world.vm_diagnostic = Some(diagnostic);
+        }
+    }
+}
+
+#[when(expr = "the VM session evaluates {string}")]
+async fn vm_session_evaluates_source(world: &mut AnvilWorld, source: String) {
+    match world.vm_session.eval_source(&source) {
+        Ok(output) => {
+            world.vm_output = Some(output);
+            world.vm_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.vm_output = None;
+            world.vm_diagnostic = Some(diagnostic);
+        }
+    }
+}
+
+#[when(expr = "the VM session evaluates the input with {int} instruction fuel")]
+async fn vm_session_evaluates_input_with_instruction_fuel(world: &mut AnvilWorld, fuel: usize) {
+    match world
+        .vm_session
+        .eval_source_with_budget(&world.source, VmBudget::with_instruction_fuel(fuel))
+    {
+        Ok(output) => {
+            world.vm_output = Some(output);
+            world.vm_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.vm_output = None;
+            world.vm_diagnostic = Some(diagnostic);
+        }
+    }
+}
+
 #[when(expr = "the bytecode VM runs the input with {int} instruction fuel")]
 async fn bytecode_vm_runs_input_with_instruction_fuel(world: &mut AnvilWorld, fuel: usize) {
     match compile_source(&world.source)
@@ -862,6 +916,19 @@ async fn datums_print_as_docstring(world: &mut AnvilWorld, #[step] step: &Step) 
     assert_eq!(format_datums(response.datums()), expected);
 }
 
+#[then(expr = "the REPL evaluation value prints as {string}")]
+async fn repl_evaluation_value_prints_as(world: &mut AnvilWorld, expected: String) {
+    let response = world.repl_response.as_ref().expect("REPL response");
+    let Some(evaluation) = response.evaluation() else {
+        panic!("REPL response has no evaluation");
+    };
+    let Some(value) = evaluation.value() else {
+        panic!("REPL evaluation has no value");
+    };
+
+    assert_eq!(value.to_string(), expected);
+}
+
 #[then("the AST contains one expression")]
 async fn ast_contains_one_expression(world: &mut AnvilWorld) {
     let ast = world.ast.as_ref().expect("AST response");
@@ -923,6 +990,16 @@ async fn vm_value_prints_as(world: &mut AnvilWorld, expected: String) {
     let output = world.vm_output.as_ref().expect("VM output");
 
     assert_eq!(output.value.to_string(), expected);
+}
+
+#[then(expr = "the VM session binding {string} prints as {string}")]
+async fn vm_session_binding_prints_as(world: &mut AnvilWorld, name: String, expected: String) {
+    let value = world
+        .vm_session
+        .binding(&name)
+        .unwrap_or_else(|| panic!("VM session binding {name}"));
+
+    assert_eq!(value.to_string(), expected);
 }
 
 #[then(expr = "the VM max call depth is {int}")]

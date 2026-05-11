@@ -38,8 +38,9 @@ The first executable acceptance harness is intentionally tiny but real:
 - Agents can run the suite with
   `cargo test -p anvil-acceptance --test acceptance`.
 - `reader_repl.feature` covers the first REPL-visible reader behavior,
-  Clojure-like delimiters, multiline interactive input, JSON pending events,
-  JSON-serializable diagnostics, and source-aware diagnostic rendering.
+  Clojure-like delimiters, multiline interactive input, VM-backed evaluation
+  across an interactive session, JSON pending events, JSON-serializable
+  diagnostics, and source-aware diagnostic rendering.
 - `ast_lowering.feature` covers the first syntax layer behavior: lowering
   definition and function forms, serializing AST JSON, and returning
   syntax-phase diagnostics. It also covers minimal `require` lowering,
@@ -69,6 +70,9 @@ The first executable acceptance harness is intentionally tiny but real:
   bindings, function calls, closures, proper tail calls, lexical `let`
   bindings, compile diagnostics for unsupported forms, and runtime diagnostics
   for fuel exhaustion.
+- `vm_session.feature` covers stateful VM-backed evaluation: definitions,
+  quoted data, and closures survive across successful evaluations, while failed
+  evaluations and fuel exhaustion leave the existing session state intact.
 - `resource_handles.feature` covers the first resource-handle substrate:
   typed open, redacted display, use-site missing-capability denials, narrowed
   delegation, rejected widening, and revocation.

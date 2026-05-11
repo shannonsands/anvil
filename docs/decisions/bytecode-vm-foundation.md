@@ -27,11 +27,13 @@ Implementation-facing decision:
   symbol values, quoted lists become list values, quoted vectors/maps preserve
   their collection shape, and nested quote sugar is represented as list data
   shaped like `(quote value)`. Quoted lists are never compiled as calls.
-- The initial binding model is intentionally top-level and per-program:
-  `define` writes a VM binding table, later expressions in the same program can
-  read it, and a fresh `run_source` call starts with no user bindings. Function
-  parameters are lexical locals on the active call frame and shadow captured
-  locals and top-level bindings.
+- The standalone binding model remains top-level and per-program for fresh
+  `Vm::run`/`run_source` calls: `define` writes a VM binding table and later
+  expressions in the same program can read it. Stateful REPL/host evaluation
+  uses `VmSession`, which carries top-level bindings, binding names, and
+  function prototypes across successful evaluations. Function parameters are
+  lexical locals on the active call frame and shadow captured locals and
+  top-level bindings.
 - Function values now carry an owned lexical capture map. Loading a function in
   a non-top-level frame captures the current frame locals, including any
   transitive outer captures already visible to that frame. Calling a closure
@@ -64,6 +66,9 @@ Implementation-facing decision:
 - `VmOutput` includes `max_call_depth` as an initial execution metric so tests,
   agents, and hosts can distinguish real tail-call frame replacement from
   merely returning the right value.
+- `VmSession` commits updated bindings and function/compiler tables only after
+  a successful top-level return. Runtime or compile failures keep the prior
+  session state alive, including after instruction-fuel exhaustion.
 
 Non-goals for this slice:
 

@@ -6,19 +6,22 @@ Canonical planning note:
 
 Implementation-facing decision:
 
-- Start implementation with the agent-facing REPL loop, but make the first REPL
-  reader-backed rather than evaluator-backed.
-- The first REPL accepts source text, runs the lexer and datum reader, prints
-  parsed datums, and reports structured diagnostics with spans.
+- Start implementation with the agent-facing REPL loop. The first REPL was
+  reader-backed rather than evaluator-backed; after the VM foundation landed,
+  the interactive REPL graduated to stateful VM-backed evaluation.
+- The reader surface accepts source text, runs the lexer and datum reader,
+  prints parsed datums, and reports structured diagnostics with spans.
+- The interactive REPL now evaluates complete forms through `VmSession` and
+  preserves successful top-level definitions across later interactions.
 - Interactive REPL sessions keep reading when the current input is incomplete,
   while batch `read` keeps reporting incomplete input as a structured reader
   diagnostic.
 - In JSON mode, interactive REPL sessions emit explicit `pending` events for
   incomplete input so agents can distinguish continuation from a stalled
   runtime.
-- The VM remains the reference execution path, but it should come after the
-  language has a concrete reader, spans, diagnostics, acceptance specs, and
-  agent-visible feedback loop.
+- The VM remains the reference execution path. The reader-first ordering kept
+  spans, diagnostics, acceptance specs, and agent-visible feedback stable before
+  evaluation was attached to the REPL.
 - Parser/reader diagnostics should be designed as the first instance of the
   broader agent protocol: concise by default, structured enough to drive tests
   and future REPL facets.
@@ -41,9 +44,10 @@ Concrete order:
 10. Capabilities, host API, and resource handles.
 11. Runtime attach, debugger, actors, and live process inspection.
 
-Non-goal for the first REPL: evaluating code. Early output should be honest
-about being read-only until AST lowering and bytecode execution exist.
+Historical non-goal for M1: evaluating code. Early output was honest about
+being read-only until AST lowering and bytecode execution existed.
 
-Current implementation has reached step 5 for the first subset: literals,
-symbols, quote, `define`, `if`, `do`, `fn`/`lambda`, calls, vectors, and maps.
-Evaluation remains intentionally absent.
+Current implementation has reached VM-backed interactive evaluation for the
+bootstrap subset: literals, symbols, quote-as-data, `define`, `if`, `do`,
+sequential lexical `let`/`let*`, `fn`/`lambda`, calls, closures, vectors, maps,
+and proper tail calls. Batch `read` remains a reader/diagnostic command.

@@ -5,18 +5,22 @@ a Chez-quality Lisp-family system for agent programming, declarative reasoning,
 secure live runtimes, and eventual ML-native compute.
 
 This repository is still early, but it now has the first executable language
-slice: a reader-backed REPL, source-aware AST lowering, deterministic module
-planning surfaces, and a bootstrap register-based bytecode VM. The local
+slice: a VM-backed interactive REPL, source-aware AST lowering, deterministic
+module planning surfaces, and a bootstrap register-based bytecode VM. The local
 planning workspace lives at:
 
 `/Users/shannon/Workspace/Workspace/Obsidian/Global/Projects/anvil-language-runtime`
 
 ## Current Shape
 
-- Rust workspace with a tiny smoke-testable core crate and CLI crate.
+- Rust workspace with a smoke-testable core crate, CLI crate, and executable
+  Cucumber acceptance harness.
 - Bytecode VM first, not native JIT first.
 - Bootstrap register-based VM for literals, vectors, ordered maps, `do`, `if`,
-  source-mapped compile/runtime diagnostics, and instruction fuel.
+  quote-as-data, `define`, lexical `let`, functions, closures, proper tail
+  calls, source-mapped compile/runtime diagnostics, and instruction fuel.
+- Stateful `VmSession` evaluation for REPL/host surfaces, preserving top-level
+  bindings and function tables across successful interactions.
 - Agent REPL, debugger, and runtime attach are core product surfaces.
 - Capability-aware runtime kernel, process/task isolation, and auditable
   resource handles.

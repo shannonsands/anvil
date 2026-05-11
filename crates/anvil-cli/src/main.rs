@@ -5,8 +5,9 @@ use std::{
 };
 
 use anvil_core::{
-    ReaderDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst, SyntaxObject,
-    VmOutput, lower_source, project_shape, read_repl_input, run_source, syntax_from_source,
+    EvaluationStatus, ReaderDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst,
+    SyntaxObject, VmOutput, lower_source, project_shape, read_repl_input, run_source,
+    syntax_from_source,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,7 +80,7 @@ fn print_help() {
     print_project_shape();
     println!();
     println!("Commands:");
-    println!("  repl          Start the reader-backed REPL. Evaluation is not implemented yet.");
+    println!("  repl          Start the VM-backed REPL.");
     println!("  read [SOURCE] Read SOURCE as Anvil datums, or read stdin when SOURCE is omitted.");
     println!(
         "  syntax [SOURCE] Wrap SOURCE as syntax objects, or read stdin when SOURCE is omitted."
@@ -132,7 +133,7 @@ fn run_repl(format: OutputFormat) -> io::Result<()> {
 
 fn print_repl_banner(interactive: bool, format: OutputFormat) {
     if interactive && format == OutputFormat::Text {
-        println!("Anvil reader REPL. Evaluation is not implemented yet.");
+        println!("Anvil VM REPL.");
         println!("Use :quit to exit.");
     }
 }
@@ -418,14 +419,18 @@ fn print_interaction(interaction: &ReplInteraction, format: OutputFormat) -> io:
 
 fn print_text_response(response: &ReplResponse) -> io::Result<()> {
     match response {
-        ReplResponse::Read { datums, .. } => {
-            if datums.is_empty() {
-                println!("ok");
+        ReplResponse::Read { datums, evaluation } => match evaluation {
+            EvaluationStatus::Value { output } => println!("value {}", output.value),
+            EvaluationStatus::Error { diagnostic } => print_diagnostic(diagnostic),
+            EvaluationStatus::NotImplemented => {
+                if datums.is_empty() {
+                    println!("ok");
+                }
+                for datum in datums {
+                    println!("ok {datum}");
+                }
             }
-            for datum in datums {
-                println!("ok {datum}");
-            }
-        }
+        },
         ReplResponse::Error { diagnostic } => print_diagnostic(diagnostic),
     }
     Ok(())

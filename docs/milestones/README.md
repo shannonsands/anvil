@@ -80,6 +80,11 @@ Current slice:
   replacement for tail calls are implemented. Sequential lexical `let`/`let*`
   bindings now use explicit scope push/bind/pop bytecode and restore shadowed
   locals when the lexical body exits.
+- `VmSession` now gives the REPL and future host surfaces stateful evaluation:
+  successful interactions persist top-level bindings, binding names, and
+  function prototypes; failed interactions do not corrupt prior state.
+- The CLI `repl` command is VM-backed for complete interactive forms, while
+  `read` remains a reader/diagnostic command.
 - Unsupported executable forms should fail with compile-phase diagnostics until
   modules, host calls, and resource handles have their runtime contracts.
 - The final value direction is now locked as tracing-GC-managed immutable

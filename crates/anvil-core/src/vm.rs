@@ -273,7 +273,9 @@ impl Vm {
     }
 
     pub fn run(&self, program: &BytecodeProgram) -> VmResult<VmOutput> {
-        Interpreter::new(program, self.budget).run()
+        Interpreter::new(program, self.budget)
+            .run()
+            .map(|run| run.output)
     }
 }
 
@@ -306,6 +308,24 @@ pub fn compile_ast(source: &SourceText, expressions: &[SpannedAst]) -> VmResult<
     Ok(compiler.finish())
 }
 
+fn compile_ast_with_context(
+    source: &SourceText,
+    expressions: &[SpannedAst],
+    bindings: Vec<String>,
+    functions: Vec<FunctionPrototype>,
+) -> VmResult<BytecodeProgram> {
+    let mut compiler = Compiler::with_context(source, bindings, functions);
+    compiler.compile_expressions(expressions, RESULT_REGISTER)?;
+    compiler.emit(
+        Instruction::Return {
+            src: RESULT_REGISTER,
+        },
+        compiler.unit.last_span,
+    );
+
+    Ok(compiler.finish())
+}
+
 pub fn run_source(source: &str) -> VmResult<VmOutput> {
     run_source_text(&SourceText::repl(source))
 }
@@ -314,6 +334,89 @@ pub fn run_source_text(source: &SourceText) -> VmResult<VmOutput> {
     let program = compile_source_text(source)?;
 
     Vm::new().run(&program)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VmSession {
+    budget: VmBudget,
+    bindings: BTreeMap<String, Value>,
+    binding_names: Vec<String>,
+    functions: Vec<FunctionPrototype>,
+}
+
+impl VmSession {
+    pub fn new() -> Self {
+        Self {
+            budget: VmBudget::default(),
+            bindings: BTreeMap::new(),
+            binding_names: Vec::new(),
+            functions: Vec::new(),
+        }
+    }
+
+    pub fn with_budget(budget: VmBudget) -> Self {
+        Self {
+            budget,
+            ..Self::new()
+        }
+    }
+
+    pub fn eval_source(&mut self, source: &str) -> VmResult<VmOutput> {
+        self.eval_source_text(&SourceText::repl(source))
+    }
+
+    pub fn eval_source_text(&mut self, source: &SourceText) -> VmResult<VmOutput> {
+        self.eval_source_text_with_budget(source, self.budget)
+    }
+
+    pub fn eval_source_with_budget(
+        &mut self,
+        source: &str,
+        budget: VmBudget,
+    ) -> VmResult<VmOutput> {
+        self.eval_source_text_with_budget(&SourceText::repl(source), budget)
+    }
+
+    pub fn eval_source_text_with_budget(
+        &mut self,
+        source: &SourceText,
+        budget: VmBudget,
+    ) -> VmResult<VmOutput> {
+        let ast = lower_source_text(source)?;
+        let program = compile_ast_with_context(
+            source,
+            &ast,
+            self.binding_names.clone(),
+            self.functions.clone(),
+        )?;
+        let run = Interpreter::new_with_bindings(&program, budget, self.bindings.clone()).run()?;
+
+        self.bindings = run.bindings;
+        self.binding_names = program.bindings.clone();
+        self.functions = program.functions.clone();
+
+        Ok(run.output)
+    }
+
+    pub fn bindings(&self) -> &BTreeMap<String, Value> {
+        &self.bindings
+    }
+
+    pub fn binding(&self, name: &str) -> Option<&Value> {
+        self.bindings.get(name)
+    }
+
+    pub fn reset(&mut self) {
+        self.bindings.clear();
+        self.binding_names.clear();
+        self.functions.clear();
+    }
+}
+
+impl Default for VmSession {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 struct Compiler<'source> {
@@ -350,6 +453,20 @@ impl<'source> Compiler<'source> {
             constants: Vec::new(),
             bindings: Vec::new(),
             functions: Vec::new(),
+            unit: CompileUnit::new(),
+        }
+    }
+
+    fn with_context(
+        source: &'source SourceText,
+        bindings: Vec<String>,
+        functions: Vec<FunctionPrototype>,
+    ) -> Self {
+        Self {
+            source,
+            constants: Vec::new(),
+            bindings,
+            functions,
             unit: CompileUnit::new(),
         }
     }
@@ -978,19 +1095,32 @@ struct Interpreter<'program> {
     max_call_depth: usize,
 }
 
+struct VmRun {
+    output: VmOutput,
+    bindings: BTreeMap<String, Value>,
+}
+
 impl<'program> Interpreter<'program> {
     fn new(program: &'program BytecodeProgram, budget: VmBudget) -> Self {
+        Self::new_with_bindings(program, budget, BTreeMap::new())
+    }
+
+    fn new_with_bindings(
+        program: &'program BytecodeProgram,
+        budget: VmBudget,
+        bindings: BTreeMap<String, Value>,
+    ) -> Self {
         Self {
             program,
             budget,
             frames: vec![ExecutionFrame::top_level(program.register_count)],
-            bindings: BTreeMap::new(),
+            bindings,
             instructions_executed: 0,
             max_call_depth: 1,
         }
     }
 
-    fn run(mut self) -> VmResult<VmOutput> {
+    fn run(mut self) -> VmResult<VmRun> {
         loop {
             let instruction = self.current_instruction()?.clone();
             self.consume_fuel(instruction.span)?;
@@ -1002,10 +1132,7 @@ impl<'program> Interpreter<'program> {
         }
     }
 
-    fn execute_instruction(
-        &mut self,
-        instruction: BytecodeInstruction,
-    ) -> VmResult<Option<VmOutput>> {
+    fn execute_instruction(&mut self, instruction: BytecodeInstruction) -> VmResult<Option<VmRun>> {
         let span = instruction.span;
         match instruction.instruction {
             Instruction::JumpIfFalse { condition, target } => {
@@ -1109,14 +1236,17 @@ impl<'program> Interpreter<'program> {
         self.jump_to(target, span)
     }
 
-    fn return_from_frame(&mut self, src: usize, span: SourceSpan) -> VmResult<Option<VmOutput>> {
+    fn return_from_frame(&mut self, src: usize, span: SourceSpan) -> VmResult<Option<VmRun>> {
         let value = self.register(src, span)?.clone();
         let return_register = self.current_frame()?.return_register;
         let Some(dst) = return_register else {
-            return Ok(Some(VmOutput {
-                value,
-                instructions_executed: self.instructions_executed,
-                max_call_depth: self.max_call_depth,
+            return Ok(Some(VmRun {
+                output: VmOutput {
+                    value,
+                    instructions_executed: self.instructions_executed,
+                    max_call_depth: self.max_call_depth,
+                },
+                bindings: std::mem::take(&mut self.bindings),
             }));
         };
 
@@ -1947,6 +2077,80 @@ mod tests {
             run_value("(do (define x 10) '(define x 42) x)"),
             Value::Integer(10)
         );
+    }
+
+    #[test]
+    fn vm_session_persists_top_level_bindings() {
+        let mut session = VmSession::new();
+
+        assert_eq!(
+            session.eval_source("(define answer 42)").unwrap().value,
+            Value::Integer(42)
+        );
+        assert_eq!(
+            session.eval_source("answer").unwrap().value,
+            Value::Integer(42)
+        );
+        assert_eq!(session.binding("answer"), Some(&Value::Integer(42)));
+    }
+
+    #[test]
+    fn vm_session_preserves_function_tables_across_evals() {
+        let mut session = VmSession::new();
+
+        session
+            .eval_source("(define make-adder (fn [x] (fn [y] (+ x y))))")
+            .unwrap();
+        session
+            .eval_source("(define add40 (make-adder 40))")
+            .unwrap();
+
+        assert_eq!(
+            session.eval_source("(add40 2)").unwrap().value,
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn vm_session_failed_eval_does_not_corrupt_bindings() {
+        let mut session = VmSession::new();
+
+        session.eval_source("(define answer 42)").unwrap();
+        let diagnostic = session.eval_source("missing").unwrap_err();
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_UNBOUND_SYMBOL");
+
+        assert_eq!(
+            session.eval_source("answer").unwrap().value,
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn vm_session_budget_failure_keeps_session_alive() {
+        let mut session = VmSession::new();
+
+        session.eval_source("(define answer 42)").unwrap();
+        let diagnostic = session
+            .eval_source_with_budget("answer", VmBudget::with_instruction_fuel(0))
+            .unwrap_err();
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_FUEL_EXHAUSTED");
+
+        assert_eq!(
+            session.eval_source("answer").unwrap().value,
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn vm_session_can_reset_bindings_and_compiler_context() {
+        let mut session = VmSession::new();
+
+        session.eval_source("(define answer 42)").unwrap();
+        session.reset();
+
+        assert!(session.bindings().is_empty());
+        let diagnostic = session.eval_source("answer").unwrap_err();
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_UNBOUND_SYMBOL");
     }
 
     #[test]

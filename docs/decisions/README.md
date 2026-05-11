@@ -45,9 +45,9 @@ matter to code structure.
   currently has no approved baseline.
 - Executable acceptance specs use Gherkin under `specs/` and a Rust-native
   Cucumber harness in the `anvil-acceptance` crate.
-- Implementation starts REPL-first: the first REPL is reader-backed and
-  diagnostic-focused, with VM execution added after the reader, spans, datums,
-  and acceptance specs are stable.
+- Implementation starts REPL-first: the first REPL was reader-backed and
+  diagnostic-focused; the interactive REPL is now VM-backed while the batch
+  `read` command remains a read-only reader/diagnostic surface.
 - Initial reader grammar: Lisp reader with `()`, `[]`, `{}`, strings, comments,
   quote sugar, keywords, nil, booleans, integers, floats, symbols, ordered maps,
   spans, and structured diagnostics.
@@ -90,6 +90,10 @@ matter to code structure.
   inspect stack behavior, while unsupported executable forms produce
   compile-phase diagnostics and unbound symbols/non-callable values produce
   runtime diagnostics.
+- Stateful `VmSession` evaluation persists top-level bindings, compiler binding
+  names, and function prototype tables across successful evaluations. Failed
+  evaluations, including fuel exhaustion, leave the previous session state
+  intact so REPL and host clients can recover without rebuilding the session.
 - Ordinary language values use tracing GC as the primary memory model. The
   first real collector should be precise, stop-the-world, non-moving, and
   safe-point based, with opaque value references, immutable default values,
