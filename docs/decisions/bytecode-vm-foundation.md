@@ -14,15 +14,19 @@ Implementation-facing decision:
   execution must not use Rust recursion for runtime control flow. Function calls
   now run through explicit VM call frames.
 - The bootstrap value representation is an owned immutable `Value` enum for
-  nil, booleans, integers, `Float64`, strings, keywords, vectors, and ordered
-  maps, plus function closure values with owned lexical captures. This is a
-  bootstrap surface, not the final heap layout. The final direction is covered by
-  `docs/decisions/value-heap-gc.md`.
+  nil, booleans, integers, `Float64`, strings, symbols, keywords, lists,
+  vectors, and ordered maps, plus function closure values with owned lexical
+  captures. This is a bootstrap surface, not the final heap layout. The final
+  direction is covered by `docs/decisions/value-heap-gc.md`.
 - `false` and `nil` are falsey for branch tests; all other values are truthy.
 - The first compiler supports top-level expression sequences, literals,
-  vectors, ordered maps, `do`, `if`, sequential lexical `let`/`let*`, top-level
-  `define`, symbol lookup, `fn` closure values, user-defined function calls,
-  and bootstrap primitive calls.
+  quote-as-data, vectors, ordered maps, `do`, `if`, sequential lexical
+  `let`/`let*`, top-level `define`, symbol lookup, `fn` closure values,
+  user-defined function calls, and bootstrap primitive calls.
+- Quote compiles to a constant immutable data value. Quoted symbols become
+  symbol values, quoted lists become list values, quoted vectors/maps preserve
+  their collection shape, and nested quote sugar is represented as list data
+  shaped like `(quote value)`. Quoted lists are never compiled as calls.
 - The initial binding model is intentionally top-level and per-program:
   `define` writes a VM binding table, later expressions in the same program can
   read it, and a fresh `run_source` call starts with no user bindings. Function
@@ -53,8 +57,8 @@ Implementation-facing decision:
 - Calling a non-function value fails at runtime with
   `ANVIL_RUNTIME_NOT_CALLABLE`; wrong function arity fails with
   `ANVIL_RUNTIME_ARITY`.
-- Unsupported executable forms such as `require` and quote still fail during
-  compilation with `phase: compile` diagnostics.
+- Unsupported executable forms such as `require` still fail during compilation
+  with `phase: compile` diagnostics.
 - Runtime diagnostics use `phase: runtime` and preserve the current instruction
   span. The first runtime budget is instruction fuel.
 - `VmOutput` includes `max_call_depth` as an initial execution metric so tests,

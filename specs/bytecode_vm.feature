@@ -26,6 +26,20 @@ Feature: Bytecode VM foundation
     When the bytecode VM runs the input
     Then the VM value prints as "{:ok true :answer 42}"
 
+  Scenario: Run quoted code as data
+    Given the agent input "'(+ 1 2)"
+    When the bytecode VM runs the input
+    Then the VM value prints as "(+ 1 2)"
+
+  Scenario: Quoted forms do not execute
+    Given the agent input
+      """
+      (define x 10)
+      (do '(define x 42) x)
+      """
+    When the bytecode VM runs the input
+    Then the VM value prints as "10"
+
   Scenario: Run top-level definitions and symbol lookup
     Given the agent input
       """

@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::{
     ast::{AstKind, AstLiteral, LetBinding, SpannedAst, lower_source_text},
     diagnostic::{Diagnostic, DiagnosticPhase, DiagnosticSpec},
+    reader::{Datum, SpannedDatum},
     source::{SourceLocation, SourceSpan, SourceText},
 };
 
@@ -121,7 +122,9 @@ pub enum Value {
     Integer(i64),
     Float64(f64),
     String(String),
+    Symbol(String),
     Keyword(String),
+    List(Vec<Value>),
     Vector(Vec<Value>),
     Map(Vec<ValueMapEntry>),
     Function(FunctionValue),
@@ -141,7 +144,9 @@ impl fmt::Display for Value {
             Self::Integer(value) => write!(f, "{value}"),
             Self::Float64(value) => write!(f, "{value}"),
             Self::String(value) => write!(f, "\"{}\"", escape_string(value)),
+            Self::Symbol(value) => f.write_str(value),
             Self::Keyword(value) => write!(f, ":{value}"),
+            Self::List(items) => write_sequence(f, "(", ")", items),
             Self::Vector(items) => write_sequence(f, "[", "]", items),
             Self::Map(entries) => write_map(f, entries),
             Self::Function(value) => write!(f, "#<fn:{}>", value.function),
@@ -396,6 +401,10 @@ impl<'source> Compiler<'source> {
                 self.load_constant(dst, literal_value(value), expression.span);
                 Ok(())
             }
+            AstKind::Quote { datum } => {
+                self.load_constant(dst, quoted_datum_value(datum), expression.span);
+                Ok(())
+            }
             AstKind::Vector { items } => self.compile_vector(items, dst, expression.span),
             AstKind::Map { entries } => self.compile_map(entries, dst, expression.span),
             AstKind::Do { expressions } => self.compile_do(expressions, dst, expression.span),
@@ -423,6 +432,7 @@ impl<'source> Compiler<'source> {
                 span: expression.span,
                 expected: vec![
                     "literal".to_string(),
+                    "quote".to_string(),
                     "vector".to_string(),
                     "map".to_string(),
                     "do".to_string(),
@@ -861,6 +871,33 @@ fn literal_value(literal: &AstLiteral) -> Value {
         AstLiteral::Float64(value) => Value::Float64(*value),
         AstLiteral::String(value) => Value::String(value.clone()),
         AstLiteral::Keyword(value) => Value::Keyword(value.clone()),
+    }
+}
+
+fn quoted_datum_value(datum: &SpannedDatum) -> Value {
+    match &datum.datum {
+        Datum::Nil => Value::Nil,
+        Datum::Bool(value) => Value::Bool(*value),
+        Datum::Integer(value) => Value::Integer(*value),
+        Datum::Float64(value) => Value::Float64(*value),
+        Datum::String(value) => Value::String(value.clone()),
+        Datum::Symbol(value) => Value::Symbol(value.clone()),
+        Datum::Keyword(value) => Value::Keyword(value.clone()),
+        Datum::List(items) => Value::List(items.iter().map(quoted_datum_value).collect()),
+        Datum::Vector(items) => Value::Vector(items.iter().map(quoted_datum_value).collect()),
+        Datum::Map(entries) => Value::Map(
+            entries
+                .iter()
+                .map(|(key, value)| ValueMapEntry {
+                    key: quoted_datum_value(key),
+                    value: quoted_datum_value(value),
+                })
+                .collect(),
+        ),
+        Datum::Quote(quoted) => Value::List(vec![
+            Value::Symbol("quote".to_string()),
+            quoted_datum_value(quoted),
+        ]),
     }
 }
 
@@ -1738,7 +1775,9 @@ fn value_type_name(value: &Value) -> &'static str {
         Value::Integer(_) => "integer",
         Value::Float64(_) => "float64",
         Value::String(_) => "string",
+        Value::Symbol(_) => "symbol",
         Value::Keyword(_) => "keyword",
+        Value::List(_) => "list",
         Value::Vector(_) => "vector",
         Value::Map(_) => "map",
         Value::Function(_) => "function",
@@ -1879,6 +1918,35 @@ mod tests {
             ])
         );
         assert_eq!(value.to_string(), "{:ok true :answer 42}");
+    }
+
+    #[test]
+    fn runs_quote_as_data() {
+        assert_eq!(run_value("'answer"), Value::Symbol("answer".into()));
+        assert_eq!(
+            run_value("'(+ 1 2)"),
+            Value::List(vec![
+                Value::Symbol("+".into()),
+                Value::Integer(1),
+                Value::Integer(2),
+            ])
+        );
+        assert_eq!(run_value("'(let [x 1] x)").to_string(), "(let [x 1] x)");
+        assert_eq!(
+            run_value("'[answer {:ok true} nil]").to_string(),
+            "[answer {:ok true} nil]"
+        );
+        assert_eq!(run_value("''answer").to_string(), "(quote answer)");
+    }
+
+    #[test]
+    fn quoted_forms_do_not_execute() {
+        assert_eq!(run_value("'missing"), Value::Symbol("missing".into()));
+        assert_eq!(run_value("'(+ missing 1)").to_string(), "(+ missing 1)");
+        assert_eq!(
+            run_value("(do (define x 10) '(define x 42) x)"),
+            Value::Integer(10)
+        );
     }
 
     #[test]
@@ -2235,7 +2303,9 @@ mod tests {
             Value::Integer(7),
             Value::Float64(2.5),
             Value::String("a\\b\"c\n\r\t".into()),
+            Value::Symbol("answer".into()),
             Value::Keyword("ready".into()),
+            Value::List(vec![Value::Symbol("+".into()), Value::Integer(1)]),
             Value::Map(vec![ValueMapEntry {
                 key: Value::Keyword("nested".into()),
                 value: Value::Bool(false),
@@ -2245,7 +2315,7 @@ mod tests {
 
         assert_eq!(
             value.to_string(),
-            "[nil true 7 2.5 \"a\\\\b\\\"c\\n\\r\\t\" :ready {:nested false} #<fn:7>]"
+            "[nil true 7 2.5 \"a\\\\b\\\"c\\n\\r\\t\" answer :ready (+ 1) {:nested false} #<fn:7>]"
         );
 
         let mut captures = BTreeMap::new();

@@ -13,8 +13,9 @@ Implementation-facing decision:
   breathe when useful.
 - `;` starts a line comment.
 - Strings use double quotes and support `\n`, `\r`, `\t`, `\"`, and `\\`.
-- Quote sugar uses `'datum` and reads as a quote datum for now. Lowering to
-  core forms is deferred to AST/macro work.
+- Quote sugar uses `'datum` and reads as a quote datum. AST lowering preserves
+  it as quote, and the bootstrap VM compiles quote to immutable data; later
+  macro work can still decide whether and how to lower quote into core forms.
 - Atoms are interpreted by the reader as `nil`, booleans, keywords, signed
   `i64` integers, `f64` decimal/exponent literals, or symbols.
 - Maps require an even number of forms and preserve key/value order in the datum
@@ -28,7 +29,7 @@ Deliberately deferred:
 - Reader macros beyond quote.
 - Namespaces and module paths.
 - Metadata, dispatch forms, regex literals, tagged literals, and set literals.
-- AST validation and evaluation.
+- Full AST validation, macro expansion, and module-aware evaluation.
 
 The reader-backed REPL is the first consumer of this grammar. It should remain
 honest that evaluation is not implemented yet.

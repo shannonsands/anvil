@@ -72,16 +72,16 @@ Exit criteria:
 Current slice:
 
 - Bootstrap register bytecode runs top-level expression sequences, literals,
-  vectors, ordered maps, `do`, `if`, top-level `define`, symbol lookup,
-  checked bootstrap numeric primitive calls, function values, direct and named
-  function calls, returned closures, nested closures, and proper tail calls.
+  quote-as-data, symbols and lists as data, vectors, ordered maps, `do`, `if`,
+  top-level `define`, symbol lookup, checked bootstrap numeric primitive calls,
+  function values, direct and named function calls, returned closures, nested
+  closures, and proper tail calls.
 - Lexical parameter locals, owned lexical closure captures, and active-frame
   replacement for tail calls are implemented. Sequential lexical `let`/`let*`
   bindings now use explicit scope push/bind/pop bytecode and restore shadowed
   locals when the lexical body exits.
 - Unsupported executable forms should fail with compile-phase diagnostics until
-  modules, host calls, resource handles, and quote-as-data have their runtime
-  contracts.
+  modules, host calls, and resource handles have their runtime contracts.
 - The final value direction is now locked as tracing-GC-managed immutable
   language values with explicit mutable abstractions and supervisor-owned
   resource handles outside the ordinary heap.
