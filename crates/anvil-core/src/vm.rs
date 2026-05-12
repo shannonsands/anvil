@@ -11,6 +11,7 @@ use crate::{
     diagnostic::{Diagnostic, DiagnosticPhase, DiagnosticSpec},
     host::{HostCallContext, HostCallFailure, HostFunctionRegistry, HostFunctionSpec},
     reader::{Datum, SpannedDatum},
+    response::{EvalResponse, ResponseEnvelope, ResponseOptions},
     source::{SourceLocation, SourceSpan, SourceText},
 };
 
@@ -390,6 +391,17 @@ pub fn run_source_text(source: &SourceText) -> VmResult<VmOutput> {
     Vm::new().run(&program)
 }
 
+pub fn run_source_response(source: &str) -> EvalResponse {
+    run_source_text_response(&SourceText::repl(source))
+}
+
+pub fn run_source_text_response(source: &SourceText) -> EvalResponse {
+    match run_source_text(source) {
+        Ok(output) => ResponseEnvelope::ok_with_source(&output, source),
+        Err(diagnostic) => ResponseEnvelope::error(diagnostic.as_ref()),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct VmSession {
     budget: VmBudget,
@@ -479,6 +491,33 @@ impl VmSession {
         self.functions = program.functions.clone();
 
         Ok(run.output)
+    }
+
+    pub fn eval_response(&mut self, source: &str) -> EvalResponse {
+        self.eval_source_text_response(&SourceText::repl(source))
+    }
+
+    pub fn eval_response_with_options(
+        &mut self,
+        source: &str,
+        options: ResponseOptions,
+    ) -> EvalResponse {
+        self.eval_source_text_response_with_options(&SourceText::repl(source), options)
+    }
+
+    pub fn eval_source_text_response(&mut self, source: &SourceText) -> EvalResponse {
+        self.eval_source_text_response_with_options(source, ResponseOptions::default())
+    }
+
+    pub fn eval_source_text_response_with_options(
+        &mut self,
+        source: &SourceText,
+        options: ResponseOptions,
+    ) -> EvalResponse {
+        match self.eval_source_text(source) {
+            Ok(output) => ResponseEnvelope::ok_with_options(&output, Some(source), options),
+            Err(diagnostic) => ResponseEnvelope::error_with_options(diagnostic.as_ref(), options),
+        }
     }
 
     pub fn bindings(&self) -> &BTreeMap<String, Value> {

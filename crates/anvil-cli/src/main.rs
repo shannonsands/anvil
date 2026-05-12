@@ -6,9 +6,9 @@ use std::{
 };
 
 use anvil_core::{
-    EvaluationStatus, ModuleSession, ReaderDiagnostic, ReplInteraction, ReplResponse, ReplSession,
-    SpannedAst, SyntaxObject, VmOutput, load_workspace_snapshot, lower_source, project_shape,
-    read_repl_input, run_source, syntax_from_source,
+    EvalResponse, EvaluationStatus, ModuleSession, ReaderDiagnostic, ReplInteraction, ReplResponse,
+    ReplSession, SourceText, SpannedAst, SyntaxObject, load_workspace_snapshot, lower_source,
+    project_shape, read_repl_input, run_source_text_response, syntax_from_source,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,7 +202,7 @@ fn repl_prompt(session: &ReplSession) -> &'static str {
 
 fn print_pending_repl_response(session: ReplSession, format: OutputFormat) -> io::Result<()> {
     if let Some(response) = session.finish() {
-        print_response(&response, format)?;
+        print_repl_response(&response, format)?;
     }
     Ok(())
 }
@@ -273,19 +273,16 @@ fn run_command(args: Vec<String>) -> io::Result<()> {
         args.join(" ")
     };
 
-    match package_root {
+    let source = SourceText::repl(source);
+    let response = match package_root {
         Some(root) => {
             let mut session = load_module_session(root)?;
-            match session.eval_source(&source) {
-                Ok(output) => print_run_response(&output, format)?,
-                Err(diagnostic) => print_run_diagnostic(&diagnostic, format)?,
-            }
+            session.eval_source_text_response(&source)
         }
-        None => match run_source(&source) {
-            Ok(output) => print_run_response(&output, format)?,
-            Err(diagnostic) => print_run_diagnostic(&diagnostic, format)?,
-        },
-    }
+        None => run_source_text_response(&source),
+    };
+
+    print_eval_response(&response, format)?;
     Ok(())
 }
 
@@ -354,13 +351,6 @@ enum SyntaxCommandResponse<'a> {
     Error { diagnostic: &'a ReaderDiagnostic },
 }
 
-#[derive(serde::Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-enum RunCommandResponse<'a> {
-    Value { output: &'a VmOutput },
-    Error { diagnostic: &'a ReaderDiagnostic },
-}
-
 fn print_syntax_response(objects: &[SyntaxObject], format: OutputFormat) -> io::Result<()> {
     match format {
         OutputFormat::Text => {
@@ -417,34 +407,28 @@ fn print_ast_response(expressions: &[SpannedAst], format: OutputFormat) -> io::R
     Ok(())
 }
 
-fn print_run_response(output: &VmOutput, format: OutputFormat) -> io::Result<()> {
+fn print_eval_response(response: &EvalResponse, format: OutputFormat) -> io::Result<()> {
     match format {
         OutputFormat::Text => {
-            println!("value {}", output.value);
+            print_eval_response_text(response);
         }
         OutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::to_string(&RunCommandResponse::Value { output })?
-            );
+            println!("{}", serde_json::to_string(response)?);
         }
     }
 
     Ok(())
 }
 
-fn print_run_diagnostic(diagnostic: &ReaderDiagnostic, format: OutputFormat) -> io::Result<()> {
-    match format {
-        OutputFormat::Text => print_diagnostic(diagnostic),
-        OutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::to_string(&RunCommandResponse::Error { diagnostic })?
-            );
-        }
+fn print_eval_response_text(response: &EvalResponse) {
+    if let Some(value) = response.value() {
+        println!("value {}", value.display);
+        return;
     }
 
-    Ok(())
+    if let Some(diagnostic) = response.primary_diagnostic() {
+        print_diagnostic(diagnostic);
+    }
 }
 
 fn print_command_diagnostic(diagnostic: &ReaderDiagnostic, format: OutputFormat) -> io::Result<()> {
@@ -473,14 +457,29 @@ fn print_response(response: &ReplResponse, format: OutputFormat) -> io::Result<(
 
 fn print_interaction(interaction: &ReplInteraction, format: OutputFormat) -> io::Result<()> {
     match interaction {
-        ReplInteraction::Complete(response) => print_response(response, format),
+        ReplInteraction::Complete(response) => print_repl_response(response, format),
         ReplInteraction::Pending { .. } => {
             if format == OutputFormat::Json {
-                println!("{}", serde_json::to_string(interaction)?);
+                if let Some(response) = interaction.eval_response() {
+                    println!("{}", serde_json::to_string(&response)?);
+                } else {
+                    println!("{}", serde_json::to_string(interaction)?);
+                }
             }
             Ok(())
         }
     }
+}
+
+fn print_repl_response(response: &ReplResponse, format: OutputFormat) -> io::Result<()> {
+    if format == OutputFormat::Json
+        && let Some(response) = response.eval_response()
+    {
+        println!("{}", serde_json::to_string(&response)?);
+        return Ok(());
+    }
+
+    print_response(response, format)
 }
 
 fn print_text_response(response: &ReplResponse) -> io::Result<()> {

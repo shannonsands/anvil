@@ -19,6 +19,21 @@ Implementation-facing decision:
 - Reader, syntax, and module diagnostics now provide the first concrete Rust
   API shape for this protocol: source id, severity, phase, primary span, labels,
   expected/actual values, suggestions, and a source code frame.
+- `anvil-core::response` now provides the first concrete eval envelope:
+  `protocol: anvil.response.v1`, `status`, `kind`, `summary`, optional safe
+  `value`, `diagnostics`, `notices`, `effects`, `facets`, `next`, and
+  `metadata`.
+- `ResponseStatus` currently covers `ok`, `error`, and `pending`; detailed
+  denial, timeout, cancellation, and approval reasons stay in diagnostics,
+  effects, and future facets rather than widening the first branch surface.
+- `ResponseValue` pairs a display string with safe structured value data.
+  Function values are serialized as opaque structured values, not raw closure
+  capture maps or frame internals.
+- `VmSession`, `ModuleSession`, and `run_source_text_response` can produce
+  `EvalResponse` values. CLI `run --json` and VM-backed `repl --json` now emit
+  this envelope; the `read --json` command remains a reader-only surface.
+- Debug facets are opt-in through `ResponseOptions::debug`; the first facet is
+  `vm.metrics` for instruction and call-depth data.
 
 Current diagnostic fields:
 
@@ -35,6 +50,7 @@ Current diagnostic fields:
 - `suggestion` and `suggestions`: text-compatible and structured repair hints.
 - `code_frame`: one-line source frame for human output and agent repair context.
 
-Open implementation dependency: later macro, type, capability, runtime, and
-host diagnostics should reuse this shape rather than introducing parallel error
-formats.
+Open implementation dependency: result ids and facet retention, typed host
+signatures, async/streaming host runners, macro/type traces, denial/audit
+facets, and transport adapters should reuse this shape rather than introducing
+parallel response formats.

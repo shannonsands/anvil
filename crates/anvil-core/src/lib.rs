@@ -10,6 +10,7 @@ pub mod project;
 pub mod reader;
 pub mod repl;
 pub mod resource;
+pub mod response;
 pub mod source;
 pub mod syntax;
 pub mod vm;
@@ -57,6 +58,11 @@ pub use resource::{
     ResourceOperationOutcome, ResourceOperationPayload, ResourceOperationRequest,
     ResourceOperationSchema, ResourcePolicy, ResourceRedactionPolicy, ResourceRegistry,
 };
+pub use response::{
+    EvalResponse, RESPONSE_PROTOCOL, ResponseDetail, ResponseEffect, ResponseEnvelope,
+    ResponseFacet, ResponseKind, ResponseMetadata, ResponseNextAction, ResponseNotice,
+    ResponseOptions, ResponseStatus, ResponseValue, ResponseValueData, ResponseValueMapEntry,
+};
 pub use source::{SourceLocation, SourceSpan, SourceText};
 pub use syntax::{
     SyntaxContext, SyntaxDiagnostic, SyntaxObject, format_syntax_objects, syntax_from_datums,
@@ -66,7 +72,8 @@ pub use vm::{
     BytecodeInstruction, BytecodeProgram, Instruction, MapRegisterEntry, Value, ValueMapEntry, Vm,
     VmBudget, VmDiagnostic, VmOutput, VmSession, compile_ast, compile_ast_with_host_functions,
     compile_source, compile_source_text, compile_source_text_with_host_functions,
-    compile_source_with_host_functions, run_source, run_source_text,
+    compile_source_with_host_functions, run_source, run_source_response, run_source_text,
+    run_source_text_response,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

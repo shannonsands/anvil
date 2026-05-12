@@ -118,8 +118,23 @@ fn run_command_reports_compile_diagnostics_as_json() {
     assert!(output.status.success());
     let stdout = stdout_text(&output);
     assert!(stdout.contains(r#""status":"error""#));
+    assert!(stdout.contains(r#""kind":"eval_result""#));
     assert!(stdout.contains("ANVIL_COMPILE_UNSUPPORTED_FORM"));
     assert!(stdout.contains(r#""phase":"compile""#));
+}
+
+#[test]
+fn run_command_reports_success_as_response_envelope_json() {
+    let output = run_anvil(&["run", "--json", "(+ 40 2)"], "");
+
+    assert!(output.status.success());
+    let stdout = stdout_text(&output);
+    assert!(stdout.contains(r#""protocol":"anvil.response.v1""#));
+    assert!(stdout.contains(r#""status":"ok""#));
+    assert!(stdout.contains(r#""kind":"eval_result""#));
+    assert!(stdout.contains(r#""summary":"42""#));
+    assert!(stdout.contains(r#""value":{"display":"42","kind":"integer","value":42}"#));
+    assert!(stdout.contains(r#""instructions_executed":"#));
 }
 
 #[test]
@@ -170,8 +185,9 @@ fn repl_preserves_state_in_json_mode() {
 
     assert!(output.status.success());
     let stdout = stdout_text(&output);
-    assert_eq!(stdout.matches(r#""status":"value""#).count(), 2);
-    assert!(stdout.contains(r#""value":{"kind":"integer","value":42}"#));
+    assert_eq!(stdout.matches(r#""status":"ok""#).count(), 2);
+    assert!(stdout.contains(r#""kind":"eval_result""#));
+    assert!(stdout.contains(r#""value":{"display":"42","kind":"integer","value":42}"#));
 }
 
 #[test]

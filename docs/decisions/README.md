@@ -21,10 +21,13 @@ matter to code structure.
 - Runtime-internal process sandboxing is the core security model: WASM-style
   imports and handles for Anvil processes, without relying on Docker,
   Firecracker, or OS containers.
-- Agent-facing diagnostics use a concise default response envelope with
-  structured facets. The first concrete reader diagnostic includes source id,
-  severity, phase, primary span, labels, expected/actual values, suggestions,
-  and code-frame rendering; syntax diagnostics now reuse the same envelope.
+- Agent-facing diagnostics and eval results use a concise default response
+  envelope with structured facets. `EvalResponse` now emits
+  `anvil.response.v1` envelopes with `status`, `kind`, `summary`, safe
+  structured values, diagnostics, VM metadata, and opt-in debug facets. Reader
+  diagnostics include source id, severity, phase, primary span, labels,
+  expected/actual values, suggestions, and code-frame rendering; syntax
+  diagnostics reuse the same diagnostic shape.
 - Embedded-first host API: Rust hosts register functions, resources, modules,
   async calls, streams, actors/services, profiles, capabilities, budgets, event
   topics, and devices; TypeScript and other environments use the public runtime
@@ -127,6 +130,11 @@ matter to code structure.
   direct calls to registered host names as host-call bytecode, checking arity
   and capability profiles before callback invocation and mapping denials or
   callback failures to VM runtime diagnostics.
+- Initial response-envelope integration exists in `anvil-core`: `VmSession`,
+  `ModuleSession`, standalone VM execution, CLI `run --json`, and VM-backed
+  `repl --json` can return canonical `EvalResponse` values. Function values
+  remain displayable but serialize as opaque structured values so agents do not
+  depend on VM internals.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 

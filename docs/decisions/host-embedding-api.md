@@ -41,7 +41,12 @@ Implementation-facing decision:
 - Ordinary language failures, denials, approvals, timeouts, and budget
   exhaustion return the structured Anvil response envelope. Transport failures
   and runtime corruption are host-language errors.
+- The first concrete envelope is `EvalResponse` from `anvil-core::response`.
+  It is now used by VM/module session response helpers and CLI `run --json` /
+  VM-backed `repl --json`. Host function denials and callback failures flow
+  through this envelope as VM runtime diagnostics when callers use the response
+  helpers.
 
-Open implementation dependency: value serialization, typed host signatures,
-async/streaming host runners, and the response/facet retention model need
-concrete Rust types before transport adapters can be built.
+Open implementation dependency: typed host signatures, async/streaming host
+runners, result ids, and the response/facet retention model need concrete Rust
+types before transport adapters can be built.

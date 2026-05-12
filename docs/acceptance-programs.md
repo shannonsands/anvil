@@ -89,6 +89,9 @@ The first executable acceptance harness is intentionally tiny but real:
   direct calls from VM sessions, calls from required modules, arity/profile
   mediation before callback invocation, authorized host calls, and host
   callback failures mapped into VM runtime diagnostics.
+- `response_envelope.feature` covers the first canonical eval response shape:
+  concise success envelopes, structured runtime diagnostic envelopes, safe
+  value serialization, VM execution metadata, and opt-in debug facets.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as

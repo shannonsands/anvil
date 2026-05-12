@@ -26,6 +26,9 @@ planning workspace lives at:
 - Rust hosts can register initial synchronous host functions on VM/module
   sessions, with arity checks, capability-profile checks, and structured
   runtime diagnostics before host callbacks run.
+- `EvalResponse` provides the first canonical agent-facing response envelope:
+  `protocol`, `status`, `kind`, `summary`, safe structured value display,
+  diagnostics, VM metadata, and opt-in debug facets.
 - Agent REPL, debugger, and runtime attach are core product surfaces.
 - Capability-aware runtime kernel, process/task isolation, and auditable
   resource handles.

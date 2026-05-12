@@ -133,3 +133,11 @@ Current implementation slice:
 - `host_functions.feature` covers direct VM calls, required-module calls,
   capability denial before invocation, authorized calls, and host callback
   failure diagnostics.
+- `anvil-core` now has the first canonical eval response envelope:
+  `EvalResponse`/`ResponseEnvelope` with protocol, status, kind, summary, safe
+  structured values, diagnostics, metadata, effects/facets hooks, and opt-in
+  debug facets. `VmSession`, `ModuleSession`, standalone VM response helpers,
+  CLI `run --json`, and VM-backed `repl --json` can emit it.
+- `response_envelope.feature` covers concise success envelopes, runtime
+  diagnostic envelopes, VM metadata, safe value serialization, and debug facet
+  opt-in.

@@ -75,6 +75,11 @@ Implementation-facing decision:
 - `VmSession` commits updated bindings and function/compiler tables only after
   a successful top-level return. Runtime or compile failures keep the prior
   session state alive, including after instruction-fuel exhaustion.
+- VM-facing APIs now also expose canonical eval response envelopes:
+  `run_source_text_response`, `VmSession::eval_response`, and
+  `ModuleSession::eval_response` wrap VM outputs or diagnostics in
+  `anvil.response.v1` with safe value serialization, source/VM metadata, and
+  opt-in debug facets.
 
 Non-goals for this slice:
 

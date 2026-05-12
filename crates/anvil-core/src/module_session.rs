@@ -8,6 +8,7 @@ use crate::{
     host::{HostCallContext, HostCallResult, HostFunctionRegistry, HostFunctionSpec},
     module::{ModuleResolution, ModuleResolver, ModuleRootKind, ModuleSource},
     project::{PackageSnapshot, WorkspaceSnapshot},
+    response::{EvalResponse, ResponseEnvelope, ResponseOptions},
     source::{SourceSpan, SourceText},
     vm::{Value, VmBudget, VmOutput, VmSession},
 };
@@ -133,6 +134,33 @@ impl ModuleSession {
     ) -> ModuleExecutionResult<VmOutput> {
         let ast = lower_source_text_with_resolver(source, &self.resolver)?;
         self.eval_ast_source_text_with_budget(source, &ast, budget)
+    }
+
+    pub fn eval_response(&mut self, source: &str) -> EvalResponse {
+        self.eval_source_text_response(&SourceText::repl(source))
+    }
+
+    pub fn eval_response_with_options(
+        &mut self,
+        source: &str,
+        options: ResponseOptions,
+    ) -> EvalResponse {
+        self.eval_source_text_response_with_options(&SourceText::repl(source), options)
+    }
+
+    pub fn eval_source_text_response(&mut self, source: &SourceText) -> EvalResponse {
+        self.eval_source_text_response_with_options(source, ResponseOptions::default())
+    }
+
+    pub fn eval_source_text_response_with_options(
+        &mut self,
+        source: &SourceText,
+        options: ResponseOptions,
+    ) -> EvalResponse {
+        match self.eval_source_text(source) {
+            Ok(output) => ResponseEnvelope::ok_with_options(&output, Some(source), options),
+            Err(diagnostic) => ResponseEnvelope::error_with_options(diagnostic.as_ref(), options),
+        }
     }
 
     pub fn vm(&self) -> &VmSession {

@@ -2,6 +2,7 @@ use crate::{
     diagnostic::Diagnostic,
     module_session::ModuleSession,
     reader::{ReaderDiagnostic, SpannedDatum, read_source},
+    response::{EvalResponse, ResponseEnvelope},
     vm::{Value, VmDiagnostic, VmOutput, VmSession},
 };
 
@@ -75,6 +76,19 @@ impl ReplInteraction {
             Self::Pending { diagnostic, .. } => Some(diagnostic.as_ref()),
         }
     }
+
+    pub fn eval_response(&self) -> Option<EvalResponse> {
+        match self {
+            Self::Complete(response) => response.eval_response(),
+            Self::Pending {
+                diagnostic,
+                buffered_lines,
+            } => Some(ResponseEnvelope::pending(
+                diagnostic.as_ref(),
+                *buffered_lines,
+            )),
+        }
+    }
 }
 
 impl ReplResponse {
@@ -96,6 +110,13 @@ impl ReplResponse {
         match self {
             Self::Read { evaluation, .. } => Some(evaluation),
             Self::Error { .. } => None,
+        }
+    }
+
+    pub fn eval_response(&self) -> Option<EvalResponse> {
+        match self {
+            Self::Read { evaluation, .. } => evaluation.eval_response(),
+            Self::Error { diagnostic } => Some(ResponseEnvelope::error(diagnostic.as_ref())),
         }
     }
 }
@@ -228,6 +249,14 @@ impl EvaluationStatus {
         match self {
             Self::Value { output } => Some(&output.value),
             Self::NotImplemented | Self::Error { .. } => None,
+        }
+    }
+
+    pub fn eval_response(&self) -> Option<EvalResponse> {
+        match self {
+            Self::Value { output } => Some(ResponseEnvelope::ok(output)),
+            Self::Error { diagnostic } => Some(ResponseEnvelope::error(diagnostic.as_ref())),
+            Self::NotImplemented => None,
         }
     }
 }

@@ -9,18 +9,19 @@ use std::{
 };
 
 use anvil_core::{
-    AnvilManifest, AstDiagnostic, CapabilityProfile, DraftOverlay, HandleDelegationPolicy,
-    HandleEntry, HandleTable, HostCallContext, HostCallFailure, HostFunctionSpec,
-    ManifestDiagnostic, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
-    ModuleSession, PackageSnapshot, PackageSourceFile, ProjectDiagnostic, ReplInteraction,
-    ReplResponse, ReplSession, ResourceAdapter, ResourceAdapterFailure, ResourceAdapterOutcome,
-    ResourceAdapterRequest, ResourceAdapterResult, ResourceDelegationRequest, ResourceEffect,
-    ResourceEffectRecord, ResourceEntry, ResourceError, ResourceExecutionMode, ResourceOpenRequest,
-    ResourceOperationAuthorization, ResourceOperationOutcome, ResourceOperationRequest,
-    ResourceRegistry, SpannedAst, SyntaxDiagnostic, SyntaxObject, Value, Vm, VmBudget,
-    VmDiagnostic, VmOutput, VmSession, compile_source, format_ast, format_datums,
-    load_package_snapshot, load_workspace_snapshot, lower_source, lower_source_with_resolver,
-    parse_manifest, read_repl_input, run_source, syntax_from_source,
+    AnvilManifest, AstDiagnostic, CapabilityProfile, DraftOverlay, EvalResponse,
+    HandleDelegationPolicy, HandleEntry, HandleTable, HostCallContext, HostCallFailure,
+    HostFunctionSpec, ManifestDiagnostic, ModuleDiagnostic, ModuleResolution, ModuleResolver,
+    ModuleRootKind, ModuleSession, PackageSnapshot, PackageSourceFile, ProjectDiagnostic,
+    ReplInteraction, ReplResponse, ReplSession, ResourceAdapter, ResourceAdapterFailure,
+    ResourceAdapterOutcome, ResourceAdapterRequest, ResourceAdapterResult,
+    ResourceDelegationRequest, ResourceEffect, ResourceEffectRecord, ResourceEntry, ResourceError,
+    ResourceExecutionMode, ResourceOpenRequest, ResourceOperationAuthorization,
+    ResourceOperationOutcome, ResourceOperationRequest, ResourceRegistry, ResponseOptions,
+    SpannedAst, SyntaxDiagnostic, SyntaxObject, Value, Vm, VmBudget, VmDiagnostic, VmOutput,
+    VmSession, compile_source, format_ast, format_datums, load_package_snapshot,
+    load_workspace_snapshot, lower_source, lower_source_with_resolver, parse_manifest,
+    read_repl_input, run_source, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -51,6 +52,7 @@ struct AnvilWorld {
     vm_session: VmSession,
     vm_output: Option<VmOutput>,
     vm_diagnostic: Option<Box<VmDiagnostic>>,
+    eval_response: Option<EvalResponse>,
     resource_registry: ResourceRegistry,
     resource_handle_table: HandleTable,
     resource_handle: Option<HandleEntry>,
@@ -203,6 +205,7 @@ async fn agent_input(world: &mut AnvilWorld, source: String) {
     world.syntax_diagnostic = None;
     world.vm_output = None;
     world.vm_diagnostic = None;
+    world.eval_response = None;
     world.resource_error = None;
 }
 
@@ -217,6 +220,7 @@ async fn agent_doc_input(world: &mut AnvilWorld, #[step] step: &Step) {
     world.syntax_diagnostic = None;
     world.vm_output = None;
     world.vm_diagnostic = None;
+    world.eval_response = None;
 }
 
 #[given("the manifest input")]
@@ -552,6 +556,7 @@ async fn fresh_vm_session(world: &mut AnvilWorld) {
     world.vm_session = VmSession::new();
     world.vm_output = None;
     world.vm_diagnostic = None;
+    world.eval_response = None;
     reset_host_call_count(world);
 }
 
@@ -561,6 +566,7 @@ async fn fresh_module_session(world: &mut AnvilWorld) {
     world.vm_output = None;
     world.vm_diagnostic = None;
     world.module_diagnostic = None;
+    world.eval_response = None;
     reset_host_call_count(world);
 }
 
@@ -697,6 +703,23 @@ async fn vm_session_evaluates_source(world: &mut AnvilWorld, source: String) {
             world.vm_diagnostic = Some(diagnostic);
         }
     }
+}
+
+#[when(expr = "the VM session evaluates {string} as a response envelope")]
+async fn vm_session_evaluates_source_as_response_envelope(world: &mut AnvilWorld, source: String) {
+    world.eval_response = Some(world.vm_session.eval_response(&source));
+}
+
+#[when(expr = "the VM session evaluates {string} as a debug response envelope")]
+async fn vm_session_evaluates_source_as_debug_response_envelope(
+    world: &mut AnvilWorld,
+    source: String,
+) {
+    world.eval_response = Some(
+        world
+            .vm_session
+            .eval_response_with_options(&source, ResponseOptions::debug()),
+    );
 }
 
 #[when(expr = "the VM session evaluates the input with {int} instruction fuel")]
@@ -1160,6 +1183,11 @@ fn first_ast_json(world: &mut AnvilWorld) -> serde_json::Value {
     let ast = world.ast.as_ref().expect("AST response");
 
     serde_json::to_value(ast.first().expect("first AST")).expect("AST JSON")
+}
+
+fn eval_response_json(world: &mut AnvilWorld) -> serde_json::Value {
+    serde_json::to_value(world.eval_response.as_ref().expect("eval response"))
+        .expect("eval response JSON")
 }
 
 #[then(expr = "the VM value prints as {string}")]
@@ -1805,6 +1833,111 @@ async fn json_status_is(world: &mut AnvilWorld, expected: String) {
     let json = world.json_response.as_ref().expect("JSON response");
 
     assert_eq!(json["status"], expected);
+}
+
+#[then(expr = "the response envelope status is {string}")]
+async fn response_envelope_status_is(world: &mut AnvilWorld, expected: String) {
+    let json = eval_response_json(world);
+
+    assert_eq!(json["status"], expected);
+}
+
+#[then(expr = "the response envelope kind is {string}")]
+async fn response_envelope_kind_is(world: &mut AnvilWorld, expected: String) {
+    let json = eval_response_json(world);
+
+    assert_eq!(json["kind"], expected);
+}
+
+#[then(expr = "the response envelope summary is {string}")]
+async fn response_envelope_summary_is(world: &mut AnvilWorld, expected: String) {
+    let json = eval_response_json(world);
+
+    assert_eq!(json["summary"], expected);
+}
+
+#[then(expr = "the response envelope value display is {string}")]
+async fn response_envelope_value_display_is(world: &mut AnvilWorld, expected: String) {
+    let json = eval_response_json(world);
+
+    assert_eq!(json["value"]["display"], expected);
+}
+
+#[then(expr = "the response envelope value kind is {string}")]
+async fn response_envelope_value_kind_is(world: &mut AnvilWorld, expected: String) {
+    let json = eval_response_json(world);
+
+    assert_eq!(json["value"]["kind"], expected);
+}
+
+#[then(expr = "the response envelope diagnostic code is {string}")]
+async fn response_envelope_diagnostic_code_is(world: &mut AnvilWorld, expected: String) {
+    let json = eval_response_json(world);
+
+    assert_eq!(json["diagnostics"][0]["code"], expected);
+}
+
+#[then(expr = "the response envelope diagnostic phase is {string}")]
+async fn response_envelope_diagnostic_phase_is(world: &mut AnvilWorld, expected: String) {
+    let json = eval_response_json(world);
+
+    assert_eq!(json["diagnostics"][0]["phase"], expected);
+}
+
+#[then(expr = "the response envelope diagnostic primary span starts at line {int} column {int}")]
+async fn response_envelope_diagnostic_primary_span_starts_at(
+    world: &mut AnvilWorld,
+    expected_line: usize,
+    expected_column: usize,
+) {
+    let json = eval_response_json(world);
+
+    assert_eq!(
+        json["diagnostics"][0]["primary_span"]["start"]["line"],
+        expected_line
+    );
+    assert_eq!(
+        json["diagnostics"][0]["primary_span"]["start"]["column"],
+        expected_column
+    );
+}
+
+#[then("the response envelope metadata includes VM execution metrics")]
+async fn response_envelope_metadata_includes_vm_execution_metrics(world: &mut AnvilWorld) {
+    let json = eval_response_json(world);
+
+    assert!(
+        json["metadata"]["instructions_executed"]
+            .as_u64()
+            .expect("instructions_executed")
+            > 0
+    );
+    assert!(
+        json["metadata"]["max_call_depth"]
+            .as_u64()
+            .expect("max_call_depth")
+            > 0
+    );
+}
+
+#[then("the response envelope omits debug facets")]
+async fn response_envelope_omits_debug_facets(world: &mut AnvilWorld) {
+    let json = eval_response_json(world);
+
+    assert!(json.get("facets").is_none());
+}
+
+#[then(expr = "the response envelope has facet {string}")]
+async fn response_envelope_has_facet(world: &mut AnvilWorld, expected: String) {
+    let json = eval_response_json(world);
+    let facets = json["facets"].as_array().expect("facets array");
+
+    assert!(
+        facets
+            .iter()
+            .any(|facet| facet["name"].as_str() == Some(expected.as_str())),
+        "missing response facet {expected:?}: {json}"
+    );
 }
 
 #[then(expr = "the JSON diagnostic code is {string}")]
