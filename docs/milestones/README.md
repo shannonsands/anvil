@@ -141,3 +141,20 @@ Current implementation slice:
 - `response_envelope.feature` covers concise success envelopes, runtime
   diagnostic envelopes, VM metadata, safe value serialization, and debug facet
   opt-in.
+- `HostFunctionSpec` now carries optional typed signature metadata for
+  embedding wrappers and future transport bindings.
+- `anvil-core` now has `EmbeddedRuntime`, the first Rust host facade over
+  module-aware eval, host functions, resource registration, handle opening,
+  capability profile registration/activation, default VM budget, and
+  inspectable `EmbeddedRuntimeSnapshot` metadata.
+- `embedding_contract.feature` covers eval envelopes, facade inspection, host
+  function registration, active-profile host mediation, and resource opens
+  under the active profile.
+
+Remaining M4 work:
+
+- Async, streaming, blocking, and actor-backed host runners.
+- Result ids, response/facet retention, and facet lookup.
+- TypeScript/WASM transport bindings over the Rust facade.
+- Profile composition, policy persistence, approval flows, and audit sinks.
+- Full host-call/resource audit events in response facets.

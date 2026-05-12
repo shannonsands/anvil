@@ -92,6 +92,10 @@ The first executable acceptance harness is intentionally tiny but real:
 - `response_envelope.feature` covers the first canonical eval response shape:
   concise success envelopes, structured runtime diagnostic envelopes, safe
   value serialization, VM execution metadata, and opt-in debug facets.
+- `embedding_contract.feature` covers the first host embedding facade:
+  `EmbeddedRuntime` eval through response envelopes, facade inspection,
+  registered host functions, active profile mediation, and resource handle open
+  under the active profile.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as

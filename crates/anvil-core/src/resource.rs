@@ -425,6 +425,10 @@ impl ResourceRegistry {
         self.resources.get(resource_id)
     }
 
+    pub fn resources(&self) -> impl Iterator<Item = &ResourceEntry> {
+        self.resources.values()
+    }
+
     pub fn open_handle(
         &self,
         table: &mut HandleTable,

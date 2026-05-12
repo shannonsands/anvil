@@ -26,6 +26,10 @@ planning workspace lives at:
 - Rust hosts can register initial synchronous host functions on VM/module
   sessions, with arity checks, capability-profile checks, and structured
   runtime diagnostics before host callbacks run.
+- `EmbeddedRuntime` is the first Rust host facade: it evaluates through
+  canonical response envelopes, registers host functions/resources/profiles,
+  activates capability profiles, opens resource handles, and exposes a
+  TypeScript-friendly snapshot contract without leaking VM internals.
 - `EvalResponse` provides the first canonical agent-facing response envelope:
   `protocol`, `status`, `kind`, `summary`, safe structured value display,
   diagnostics, VM metadata, and opt-in debug facets.

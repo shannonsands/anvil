@@ -2,6 +2,7 @@ pub mod ast;
 pub mod capability;
 pub mod diagnostic;
 pub mod draft;
+pub mod embedding;
 pub mod host;
 pub mod manifest;
 pub mod module;
@@ -26,9 +27,14 @@ pub use diagnostic::{
     DiagnosticSuggestion,
 };
 pub use draft::{DraftModule, DraftOverlay, DraftStatus};
+pub use embedding::{
+    EMBEDDING_PROTOCOL, EmbeddedRuntime, EmbeddedRuntimeConfig, EmbeddedRuntimeError,
+    EmbeddedRuntimeErrorKind, EmbeddedRuntimeSnapshot,
+};
 pub use host::{
     HostCallContext, HostCallFailure, HostCallResult, HostFunction, HostFunctionArity,
-    HostFunctionRegistry, HostFunctionSpec, RegisteredHostFunction,
+    HostFunctionRegistry, HostFunctionSignature, HostFunctionSpec, HostParameterSpec,
+    HostResultSpec, HostValueType, RegisteredHostFunction,
 };
 pub use manifest::{
     AnvilManifest, LibraryManifest, ManifestDiagnostic, PackageManifest, SourceRoots,

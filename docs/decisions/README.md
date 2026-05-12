@@ -31,7 +31,9 @@ matter to code structure.
 - Embedded-first host API: Rust hosts register functions, resources, modules,
   async calls, streams, actors/services, profiles, capabilities, budgets, event
   topics, and devices; TypeScript and other environments use the public runtime
-  facade rather than internals.
+  facade rather than internals. `EmbeddedRuntime` now provides the first Rust
+  facade and `anvil.embedding.v1` snapshot over eval envelopes, host functions,
+  resources, handles, profiles, active profile state, and budgets.
 - Cargo-shaped packages: `Anvil.toml`, `Anvil.lock`, predictable `src/`,
   `tests/`, `evals/`, `examples/`, `docs/`, `fixtures/`, and generated
   `.anvil/` state for caches, drafts, traces, facets, and artifacts.
@@ -126,15 +128,19 @@ matter to code structure.
   generic, and domain-specific capability behavior.
 - Initial synchronous host-function integration exists in `anvil-core`: hosts
   register explicit named callbacks with arity, optional required capability,
-  and optional trust zone metadata. `VmSession` and `ModuleSession` compile
-  direct calls to registered host names as host-call bytecode, checking arity
-  and capability profiles before callback invocation and mapping denials or
-  callback failures to VM runtime diagnostics.
+  optional trust zone metadata, and optional typed signature metadata.
+  `VmSession` and `ModuleSession` compile direct calls to registered host names
+  as host-call bytecode, checking arity and capability profiles before callback
+  invocation and mapping denials or callback failures to VM runtime diagnostics.
 - Initial response-envelope integration exists in `anvil-core`: `VmSession`,
   `ModuleSession`, standalone VM execution, CLI `run --json`, and VM-backed
   `repl --json` can return canonical `EvalResponse` values. Function values
   remain displayable but serialize as opaque structured values so agents do not
   depend on VM internals.
+- Initial embedded-runtime facade exists in `anvil-core`: `EmbeddedRuntime`
+  wraps module-aware evaluation, host function registration, resource
+  registration, handle opening, capability profile registration/activation, VM
+  budgets, and inspectable `EmbeddedRuntimeSnapshot` metadata.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 

@@ -233,7 +233,7 @@ fn escape_string(value: &str) -> String {
     escaped
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct VmBudget {
     pub instruction_fuel: Option<usize>,
 }
@@ -526,6 +526,14 @@ impl VmSession {
 
     pub fn binding(&self, name: &str) -> Option<&Value> {
         self.bindings.get(name)
+    }
+
+    pub fn budget(&self) -> VmBudget {
+        self.budget
+    }
+
+    pub fn set_budget(&mut self, budget: VmBudget) {
+        self.budget = budget;
     }
 
     pub fn register_host_function<F>(&mut self, spec: HostFunctionSpec, function: F)

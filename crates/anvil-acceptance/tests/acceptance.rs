@@ -9,19 +9,19 @@ use std::{
 };
 
 use anvil_core::{
-    AnvilManifest, AstDiagnostic, CapabilityProfile, DraftOverlay, EvalResponse,
-    HandleDelegationPolicy, HandleEntry, HandleTable, HostCallContext, HostCallFailure,
-    HostFunctionSpec, ManifestDiagnostic, ModuleDiagnostic, ModuleResolution, ModuleResolver,
-    ModuleRootKind, ModuleSession, PackageSnapshot, PackageSourceFile, ProjectDiagnostic,
-    ReplInteraction, ReplResponse, ReplSession, ResourceAdapter, ResourceAdapterFailure,
-    ResourceAdapterOutcome, ResourceAdapterRequest, ResourceAdapterResult,
-    ResourceDelegationRequest, ResourceEffect, ResourceEffectRecord, ResourceEntry, ResourceError,
-    ResourceExecutionMode, ResourceOpenRequest, ResourceOperationAuthorization,
-    ResourceOperationOutcome, ResourceOperationRequest, ResourceRegistry, ResponseOptions,
-    SpannedAst, SyntaxDiagnostic, SyntaxObject, Value, Vm, VmBudget, VmDiagnostic, VmOutput,
-    VmSession, compile_source, format_ast, format_datums, load_package_snapshot,
-    load_workspace_snapshot, lower_source, lower_source_with_resolver, parse_manifest,
-    read_repl_input, run_source, syntax_from_source,
+    AnvilManifest, AstDiagnostic, CapabilityProfile, DraftOverlay, EmbeddedRuntime,
+    EmbeddedRuntimeSnapshot, EvalResponse, HandleDelegationPolicy, HandleEntry, HandleTable,
+    HostCallContext, HostCallFailure, HostFunctionSpec, ManifestDiagnostic, ModuleDiagnostic,
+    ModuleResolution, ModuleResolver, ModuleRootKind, ModuleSession, PackageSnapshot,
+    PackageSourceFile, ProjectDiagnostic, ReplInteraction, ReplResponse, ReplSession,
+    ResourceAdapter, ResourceAdapterFailure, ResourceAdapterOutcome, ResourceAdapterRequest,
+    ResourceAdapterResult, ResourceDelegationRequest, ResourceEffect, ResourceEffectRecord,
+    ResourceEntry, ResourceError, ResourceExecutionMode, ResourceOpenRequest,
+    ResourceOperationAuthorization, ResourceOperationOutcome, ResourceOperationRequest,
+    ResourceRegistry, ResponseOptions, SpannedAst, SyntaxDiagnostic, SyntaxObject, Value, Vm,
+    VmBudget, VmDiagnostic, VmOutput, VmSession, compile_source, format_ast, format_datums,
+    load_package_snapshot, load_workspace_snapshot, lower_source, lower_source_with_resolver,
+    parse_manifest, read_repl_input, run_source, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -53,6 +53,8 @@ struct AnvilWorld {
     vm_output: Option<VmOutput>,
     vm_diagnostic: Option<Box<VmDiagnostic>>,
     eval_response: Option<EvalResponse>,
+    embedded_runtime: Option<EmbeddedRuntime>,
+    embedded_snapshot: Option<EmbeddedRuntimeSnapshot>,
     resource_registry: ResourceRegistry,
     resource_handle_table: HandleTable,
     resource_handle: Option<HandleEntry>,
@@ -115,6 +117,24 @@ async fn resource_exists_with_operations(
         resource.add_operation(operation.clone(), operation);
     }
     world.resource_registry.register(resource);
+}
+
+#[given(
+    expr = "embedded resource {string} of type {string} exists in trust zone {string} with operations {string}"
+)]
+async fn embedded_resource_exists_with_operations(
+    world: &mut AnvilWorld,
+    resource_id: String,
+    type_id: String,
+    trust_zone: String,
+    operations: String,
+) {
+    let mut resource = ResourceEntry::new(resource_id, type_id, "runtime", trust_zone)
+        .with_delegation_policy(HandleDelegationPolicy::NarrowOnly);
+    for operation in split_csv(&operations) {
+        resource.add_operation(operation.clone(), operation);
+    }
+    embedded_runtime(world).register_resource(resource);
 }
 
 #[given(
@@ -570,6 +590,16 @@ async fn fresh_module_session(world: &mut AnvilWorld) {
     reset_host_call_count(world);
 }
 
+#[given(expr = "a fresh embedded runtime {string}")]
+async fn fresh_embedded_runtime(world: &mut AnvilWorld, runtime_id: String) {
+    world.embedded_runtime = Some(EmbeddedRuntime::new(runtime_id));
+    world.embedded_snapshot = None;
+    world.eval_response = None;
+    world.resource_handle = None;
+    world.resource_error = None;
+    reset_host_call_count(world);
+}
+
 #[given(expr = "host function {string} is registered")]
 async fn host_function_is_registered(world: &mut AnvilWorld, name: String) {
     register_host_add(
@@ -612,6 +642,40 @@ async fn host_function_requiring_capability_is_registered(
             calls.fetch_add(1, Ordering::Relaxed);
             Ok(Value::Keyword("authorized".to_string()))
         });
+}
+
+#[given(expr = "embedded host function {string} is registered")]
+async fn embedded_host_function_is_registered(world: &mut AnvilWorld, name: String) {
+    let calls = Arc::clone(&world.host_function_calls);
+    embedded_runtime(world).register_host_function(
+        HostFunctionSpec::new(name).with_exact_arity(2),
+        move |_context: &HostCallContext, args: &[Value]| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            host_add(args)
+        },
+    );
+}
+
+#[given(
+    expr = "embedded host function {string} requiring capability {string} in trust zone {string} is registered"
+)]
+async fn embedded_host_function_requiring_capability_is_registered(
+    world: &mut AnvilWorld,
+    name: String,
+    capability: String,
+    trust_zone: String,
+) {
+    let calls = Arc::clone(&world.host_function_calls);
+    embedded_runtime(world).register_host_function(
+        HostFunctionSpec::new(name)
+            .with_exact_arity(0)
+            .with_required_capability(capability)
+            .with_trust_zone(trust_zone),
+        move |_context, _args| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(Value::Keyword("authorized".to_string()))
+        },
+    );
 }
 
 #[given(expr = "failing host function {string} is registered with message {string}")]
@@ -677,6 +741,24 @@ async fn module_session_uses_capability_profile(
         ));
 }
 
+#[given(
+    expr = "embedded capability profile {string} for principal {string} in trust zone {string} with capabilities {string}"
+)]
+async fn embedded_capability_profile(
+    world: &mut AnvilWorld,
+    profile_id: String,
+    principal: String,
+    trust_zone: String,
+    capabilities: String,
+) {
+    embedded_runtime(world).register_profile(capability_profile(
+        profile_id,
+        principal,
+        trust_zone,
+        capabilities,
+    ));
+}
+
 #[when("the VM session evaluates the input")]
 async fn vm_session_evaluates_input(world: &mut AnvilWorld) {
     match world.vm_session.eval_source(&world.source) {
@@ -720,6 +802,42 @@ async fn vm_session_evaluates_source_as_debug_response_envelope(
             .vm_session
             .eval_response_with_options(&source, ResponseOptions::debug()),
     );
+}
+
+#[when(expr = "the embedded runtime evaluates {string}")]
+async fn embedded_runtime_evaluates_source(world: &mut AnvilWorld, source: String) {
+    world.eval_response = Some(embedded_runtime(world).eval(&source));
+}
+
+#[when("the embedded runtime facade is inspected")]
+async fn embedded_runtime_facade_is_inspected(world: &mut AnvilWorld) {
+    world.embedded_snapshot = Some(embedded_runtime(world).snapshot());
+}
+
+#[when(expr = "the embedded runtime activates profile {string}")]
+async fn embedded_runtime_activates_profile(world: &mut AnvilWorld, profile_id: String) {
+    embedded_runtime(world)
+        .activate_profile(&profile_id)
+        .unwrap_or_else(|error| panic!("activate profile {profile_id}: {error:?}"));
+}
+
+#[when(expr = "the embedded runtime opens resource {string} with grants {string}")]
+async fn embedded_runtime_opens_resource_with_grants(
+    world: &mut AnvilWorld,
+    resource_id: String,
+    grants: String,
+) {
+    let result = embedded_runtime(world).open_resource(resource_id, split_csv(&grants));
+    match result {
+        Ok(handle) => {
+            world.resource_handle = Some(handle);
+            world.resource_error = None;
+        }
+        Err(error) => {
+            world.resource_handle = None;
+            world.resource_error = Some(error);
+        }
+    }
 }
 
 #[when(expr = "the VM session evaluates the input with {int} instruction fuel")]
@@ -1190,6 +1308,13 @@ fn eval_response_json(world: &mut AnvilWorld) -> serde_json::Value {
         .expect("eval response JSON")
 }
 
+fn embedded_snapshot(world: &mut AnvilWorld) -> &EmbeddedRuntimeSnapshot {
+    world
+        .embedded_snapshot
+        .as_ref()
+        .expect("embedded runtime snapshot")
+}
+
 #[then(expr = "the VM value prints as {string}")]
 async fn vm_value_prints_as(world: &mut AnvilWorld, expected: String) {
     let output = world.vm_output.as_ref().expect("VM output");
@@ -1532,6 +1657,13 @@ async fn resource_handle_type_is(world: &mut AnvilWorld, expected: String) {
     assert_eq!(handle.type_id, expected);
 }
 
+#[then(expr = "the resource handle holder is {string}")]
+async fn resource_handle_holder_is(world: &mut AnvilWorld, expected: String) {
+    let handle = world.resource_handle.as_ref().expect("resource handle");
+
+    assert_eq!(handle.holder, expected);
+}
+
 #[then(expr = "the resource handle grants include {string}")]
 async fn resource_handle_grants_include(world: &mut AnvilWorld, expected: String) {
     let handle = world.resource_handle.as_ref().expect("resource handle");
@@ -1661,6 +1793,10 @@ fn resource_operation_outcome(world: &mut AnvilWorld) -> &ResourceOperationOutco
 
 fn resource_error(world: &mut AnvilWorld) -> &ResourceError {
     world.resource_error.as_ref().expect("resource error")
+}
+
+fn embedded_runtime(world: &mut AnvilWorld) -> &mut EmbeddedRuntime {
+    world.embedded_runtime.as_mut().expect("embedded runtime")
 }
 
 fn reset_host_call_count(world: &mut AnvilWorld) {
@@ -1937,6 +2073,82 @@ async fn response_envelope_has_facet(world: &mut AnvilWorld, expected: String) {
             .iter()
             .any(|facet| facet["name"].as_str() == Some(expected.as_str())),
         "missing response facet {expected:?}: {json}"
+    );
+}
+
+#[then(expr = "the embedded runtime snapshot protocol is {string}")]
+async fn embedded_runtime_snapshot_protocol_is(world: &mut AnvilWorld, expected: String) {
+    let snapshot = embedded_snapshot(world);
+
+    assert_eq!(snapshot.protocol, expected);
+}
+
+#[then("the embedded runtime active profile is absent")]
+async fn embedded_runtime_active_profile_is_absent(world: &mut AnvilWorld) {
+    let snapshot = embedded_snapshot(world);
+
+    assert!(snapshot.active_profile_id.is_none());
+}
+
+#[then(expr = "the embedded runtime snapshot includes host function {string}")]
+async fn embedded_runtime_snapshot_includes_host_function(
+    world: &mut AnvilWorld,
+    expected: String,
+) {
+    let snapshot = embedded_snapshot(world);
+
+    assert!(
+        snapshot
+            .host_functions
+            .iter()
+            .any(|function| function.name == expected),
+        "missing host function {expected:?}: {snapshot:?}"
+    );
+}
+
+#[then(expr = "the embedded runtime host function {string} exact arity is {int}")]
+async fn embedded_runtime_host_function_exact_arity_is(
+    world: &mut AnvilWorld,
+    name: String,
+    expected: usize,
+) {
+    let snapshot = embedded_snapshot(world);
+    let function = snapshot
+        .host_functions
+        .iter()
+        .find(|function| function.name == name)
+        .unwrap_or_else(|| panic!("host function {name}"));
+
+    assert_eq!(function.arity.min, expected);
+    assert_eq!(function.arity.max, Some(expected));
+}
+
+#[then(expr = "the embedded runtime snapshot includes resource {string}")]
+async fn embedded_runtime_snapshot_includes_resource(world: &mut AnvilWorld, expected: String) {
+    let snapshot = embedded_snapshot(world);
+
+    assert!(
+        snapshot
+            .resources
+            .iter()
+            .any(|resource| resource.resource_id == expected),
+        "missing resource {expected:?}: {snapshot:?}"
+    );
+}
+
+#[then(expr = "the embedded runtime snapshot includes handle for resource {string}")]
+async fn embedded_runtime_snapshot_includes_handle_for_resource(
+    world: &mut AnvilWorld,
+    expected: String,
+) {
+    let snapshot = embedded_snapshot(world);
+
+    assert!(
+        snapshot
+            .handles
+            .iter()
+            .any(|handle| handle.resource_id == expected),
+        "missing handle for resource {expected:?}: {snapshot:?}"
     );
 }
 

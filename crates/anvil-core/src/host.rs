@@ -141,6 +141,8 @@ where
 pub struct HostFunctionSpec {
     pub name: String,
     pub arity: HostFunctionArity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<HostFunctionSignature>,
     pub required_capability: Option<String>,
     pub trust_zone: Option<String>,
 }
@@ -150,6 +152,7 @@ impl HostFunctionSpec {
         Self {
             name: name.into(),
             arity: HostFunctionArity::any(),
+            signature: None,
             required_capability: None,
             trust_zone: None,
         }
@@ -165,6 +168,11 @@ impl HostFunctionSpec {
         self
     }
 
+    pub fn with_signature(mut self, signature: HostFunctionSignature) -> Self {
+        self.signature = Some(signature);
+        self
+    }
+
     pub fn with_required_capability(mut self, capability: impl Into<String>) -> Self {
         self.required_capability = Some(capability.into());
         self
@@ -174,6 +182,110 @@ impl HostFunctionSpec {
         self.trust_zone = Some(trust_zone.into());
         self
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HostFunctionSignature {
+    pub parameters: Vec<HostParameterSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rest: Option<Box<HostParameterSpec>>,
+    pub result: HostResultSpec,
+}
+
+impl HostFunctionSignature {
+    pub fn any() -> Self {
+        Self {
+            parameters: Vec::new(),
+            rest: None,
+            result: HostResultSpec::any(),
+        }
+    }
+
+    pub fn new(parameters: Vec<HostParameterSpec>, result: HostResultSpec) -> Self {
+        Self {
+            parameters,
+            rest: None,
+            result,
+        }
+    }
+
+    pub fn with_rest(mut self, rest: HostParameterSpec) -> Self {
+        self.rest = Some(Box::new(rest));
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HostParameterSpec {
+    pub name: String,
+    pub value_type: HostValueType,
+    pub optional: bool,
+}
+
+impl HostParameterSpec {
+    pub fn required(name: impl Into<String>, value_type: HostValueType) -> Self {
+        Self {
+            name: name.into(),
+            value_type,
+            optional: false,
+        }
+    }
+
+    pub fn optional(name: impl Into<String>, value_type: HostValueType) -> Self {
+        Self {
+            name: name.into(),
+            value_type,
+            optional: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HostResultSpec {
+    pub value_type: HostValueType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+impl HostResultSpec {
+    pub fn any() -> Self {
+        Self {
+            value_type: HostValueType::Any,
+            description: None,
+        }
+    }
+
+    pub fn new(value_type: HostValueType) -> Self {
+        Self {
+            value_type,
+            description: None,
+        }
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostValueType {
+    Any,
+    Nil,
+    Boolean,
+    Integer,
+    Float64,
+    String,
+    Symbol,
+    Keyword,
+    List,
+    Vector,
+    Map,
+    Function,
+    ResourceHandle,
+    Tensor,
+    Domain(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -330,6 +442,39 @@ mod tests {
             }
             .description(),
             "1 to 3 argument(s)"
+        );
+    }
+
+    #[test]
+    fn host_function_specs_can_carry_typed_signatures() {
+        let signature = HostFunctionSignature::new(
+            vec![
+                HostParameterSpec::required("left", HostValueType::Integer),
+                HostParameterSpec::required("right", HostValueType::Integer),
+            ],
+            HostResultSpec::new(HostValueType::Integer).with_description("sum"),
+        );
+        let spec = HostFunctionSpec::new("host/add")
+            .with_exact_arity(2)
+            .with_signature(signature.clone());
+
+        assert_eq!(
+            spec.signature.as_ref().expect("signature").parameters[0].value_type,
+            HostValueType::Integer
+        );
+        assert_eq!(spec.signature.as_ref(), Some(&signature));
+    }
+
+    #[test]
+    fn host_signature_helpers_cover_variadic_and_any_shapes() {
+        let signature = HostFunctionSignature::any()
+            .with_rest(HostParameterSpec::optional("values", HostValueType::Any));
+
+        assert!(signature.parameters.is_empty());
+        assert_eq!(signature.result, HostResultSpec::any());
+        assert_eq!(
+            signature.rest.as_ref().expect("rest").as_ref(),
+            &HostParameterSpec::optional("values", HostValueType::Any)
         );
     }
 

@@ -175,6 +175,14 @@ impl ModuleSession {
         self.vm.binding(name)
     }
 
+    pub fn budget(&self) -> VmBudget {
+        self.vm.budget()
+    }
+
+    pub fn set_budget(&mut self, budget: VmBudget) {
+        self.vm.set_budget(budget);
+    }
+
     pub fn register_host_function<F>(&mut self, spec: HostFunctionSpec, function: F)
     where
         F: Fn(&HostCallContext, &[Value]) -> HostCallResult + Send + Sync + 'static,
@@ -201,6 +209,14 @@ impl ModuleSession {
     pub fn with_capability_profile(mut self, profile: CapabilityProfile) -> Self {
         self.set_capability_profile(profile);
         self
+    }
+
+    pub fn clear_capability_profile(&mut self) {
+        self.vm.clear_capability_profile();
+    }
+
+    pub fn capability_profile(&self) -> Option<&CapabilityProfile> {
+        self.vm.capability_profile()
     }
 
     pub fn resolver(&self) -> &ModuleResolver {

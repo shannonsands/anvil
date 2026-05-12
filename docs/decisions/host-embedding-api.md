@@ -28,14 +28,25 @@ Implementation-facing decision:
   `HostFunctionRegistry` stores registered Rust callbacks by name,
   `HostFunctionSpec` declares arity plus optional required capability and trust
   zone, and `VmSession`/`ModuleSession` expose registration methods.
+- `HostFunctionSpec` now carries optional typed signature metadata through
+  `HostFunctionSignature`, `HostParameterSpec`, `HostResultSpec`, and
+  `HostValueType`. Runtime arity checks remain authoritative in the first
+  slice; signatures are inspectable contract metadata for agents, docs, and
+  future transport bindings.
 - Direct calls to registered host-function names compile to a dedicated
   bytecode instruction. Arity, trust-zone, and capability checks happen before
   invoking Rust host code. Denials and host callback failures become structured
   VM runtime diagnostics rather than host-language transport errors.
+- `EmbeddedRuntime` is the first Rust runtime facade. It wraps a
+  `ModuleSession`, owns a resource registry and handle table, stores registered
+  capability profiles, activates a profile onto the VM/module session, evaluates
+  source through `EvalResponse`, opens resources under the active profile when
+  one exists, and emits `EmbeddedRuntimeSnapshot` metadata with
+  `protocol: anvil.embedding.v1`.
 - Host functions are not ordinary first-class Anvil values yet. The current
   contract is a direct-call import surface for embedded runtimes; first-class
-  handles, async calls, streams, actor-backed services, and typed signatures are
-  later host-facade work.
+  function/resource values, async calls, streams, actor-backed services, and
+  transport adapters are later host-facade work.
 - The facade should not expose GC objects, scheduler internals, raw frames, raw
   Rust pointers, or unmediated host resources.
 - Ordinary language failures, denials, approvals, timeouts, and budget
@@ -47,6 +58,27 @@ Implementation-facing decision:
   through this envelope as VM runtime diagnostics when callers use the response
   helpers.
 
-Open implementation dependency: typed host signatures, async/streaming host
-runners, result ids, and the response/facet retention model need concrete Rust
-types before transport adapters can be built.
+## Current Core Boundary
+
+Embedding can move ahead without waiting for the rest of the language kernel.
+The core pieces that still need dedicated implementation are:
+
+- Language-level sandbox/process objects: private stacks, mailboxes, roots,
+  task state, cancellation, and supervisor ownership.
+- Capability composition beyond single profiles: roles/groups, manifest policy,
+  approvals, audit sinks, revocation propagation, and persistent policy storage.
+- Runtime concurrency forms and scheduler: lightweight tasks, actors, atoms,
+  PubSub, hooks, watchers, process supervision, and bounded `pmap`.
+- GC/root integration: tracing heap, process roots, actor roots, handle-table
+  roots, debug-safe inspection, and cycle-heavy value tests.
+- Debug/attach protocol: breakpoints, frame inspection, stack-safe debug eval,
+  effect barriers, rewind/fork/replay, and authority checks for every debug
+  operation.
+- Module generation and staged replacement: dynamic require, aliases/refer,
+  exports, bytecode cache invalidation, draft activation, rollback, and live
+  state migration.
+
+Open implementation dependency: async/streaming host runners, actor-backed
+services, result ids, response/facet retention, and TypeScript/WASM transport
+adapters need concrete Rust types on top of `EmbeddedRuntime` before bindings
+can be built.
