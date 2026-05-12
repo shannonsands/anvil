@@ -121,6 +121,12 @@ matter to code structure.
   and revocation, with `capability_denied` diagnostics and
   `capability_profiles.feature` acceptance coverage for principal, trust-zone,
   generic, and domain-specific capability behavior.
+- Initial synchronous host-function integration exists in `anvil-core`: hosts
+  register explicit named callbacks with arity, optional required capability,
+  and optional trust zone metadata. `VmSession` and `ModuleSession` compile
+  direct calls to registered host names as host-call bytecode, checking arity
+  and capability profiles before callback invocation and mapping denials or
+  callback failures to VM runtime diagnostics.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 
@@ -133,7 +139,7 @@ matter to code structure.
   GC tuning, and later generational/incremental/compacting collector strategy
   beyond the initial tracing-GC contract.
 - Async, streaming, blocking, actor-backed, and device-backed runners behind
-  the initial resource adapter execution contract.
+  the initial resource adapter and host-function execution contracts.
 - Capability profile composition, persistent policy storage, approval flows,
   and audit sinks beyond the first resource operation checks.
 - Concrete runtime syntax for `defactor`, supervisors, atoms, channels,

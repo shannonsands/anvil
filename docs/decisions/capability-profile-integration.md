@@ -30,6 +30,10 @@ Implementation-facing decision:
   `wrong_trust_zone`.
 - Revocation is supervisor-shaped but can be profile-mediated when the profile
   has `resource/revoke` in the handle's trust zone.
+- Initial synchronous host functions can declare an optional required
+  capability and trust zone. When either is present, `VmSession`/`ModuleSession`
+  require an active `CapabilityProfile` and deny before Rust callback invocation
+  if the profile lacks the trust zone or capability.
 
 ## Implementation Status
 
@@ -46,12 +50,16 @@ Implemented in this slice:
   delegation denial, and revocation.
 - `specs/capability_profiles.feature` covering the executable
   agent-facing profile contract.
+- Host-call profile checks in `crates/anvil-core/src/vm.rs`, covered by
+  `specs/host_functions.feature`.
 
 Not implemented yet:
 
 - Manifest/profile composition across packages, modules, principals, roles, and
   resource policies.
 - Budget, approval, and audit-sink integration beyond current denial events.
+- Full host-call audit events, profile composition, and approval flows beyond
+  the initial VM diagnostic path.
 - TypeScript, WASM, or transport facade profile registration.
 - Persistent profile storage or policy editing.
 

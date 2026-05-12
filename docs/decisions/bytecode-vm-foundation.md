@@ -50,6 +50,10 @@ Implementation-facing decision:
   function frame with the callee frame instead of pushing a new one, while
   preserving the caller's return register. Tail-recursive and mutually
   tail-recursive programs therefore run at constant VM call depth.
+- Registered synchronous host functions compile to explicit host-call bytecode
+  when a direct call target matches the session's `HostFunctionRegistry`.
+  Arity, trust-zone, and capability-profile checks run before Rust host code is
+  invoked; denials and callback failures return runtime diagnostics.
 - The initial primitive table is limited to checked numeric `+`, `-`, `*`, and
   `=` over `Integer` and `Float64`, with exact integer overflow reported as a
   runtime diagnostic.
@@ -74,8 +78,9 @@ Implementation-facing decision:
 
 Non-goals for this slice:
 
-- Local `define` semantics, host calls, module namespaces/generations, resource
-  handles, heap GC, actors, and debugger attachment.
+- Local `define` semantics, first-class host-function values, async/streaming
+  host calls, module namespaces/generations, heap GC, actors, and debugger
+  attachment.
 - Final scalar numeric representation. The bootstrap integer remains `i64`
   because exact `BigInt`/`Ratio` implementation is covered by the numeric
   semantics decision and will land after the basic VM loop is real.

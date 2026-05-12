@@ -1,10 +1,15 @@
-use std::{collections::BTreeMap, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use serde::Serialize;
 
 use crate::{
     ast::{AstKind, AstLiteral, LetBinding, SpannedAst, lower_source_text},
+    capability::CapabilityProfile,
     diagnostic::{Diagnostic, DiagnosticPhase, DiagnosticSpec},
+    host::{HostCallContext, HostCallFailure, HostFunctionRegistry, HostFunctionSpec},
     reader::{Datum, SpannedDatum},
     source::{SourceLocation, SourceSpan, SourceText},
 };
@@ -85,6 +90,11 @@ pub enum Instruction {
     CallPrimitive {
         dst: usize,
         primitive: usize,
+        args: Vec<usize>,
+    },
+    CallHost {
+        dst: usize,
+        function: usize,
         args: Vec<usize>,
     },
     CallFunction {
@@ -277,6 +287,16 @@ impl Vm {
             .run()
             .map(|run| run.output)
     }
+
+    pub fn run_with_host_functions(
+        &self,
+        program: &BytecodeProgram,
+        host_functions: HostFunctionRegistry,
+    ) -> VmResult<VmOutput> {
+        Interpreter::new_with_host_functions(program, self.budget, host_functions)
+            .run()
+            .map(|run| run.output)
+    }
 }
 
 impl Default for Vm {
@@ -295,8 +315,41 @@ pub fn compile_source_text(source: &SourceText) -> VmResult<BytecodeProgram> {
     compile_ast(source, &ast)
 }
 
+pub fn compile_source_with_host_functions(
+    source: &str,
+    host_functions: &HostFunctionRegistry,
+) -> VmResult<BytecodeProgram> {
+    compile_source_text_with_host_functions(&SourceText::repl(source), host_functions)
+}
+
+pub fn compile_source_text_with_host_functions(
+    source: &SourceText,
+    host_functions: &HostFunctionRegistry,
+) -> VmResult<BytecodeProgram> {
+    let ast = lower_source_text(source)?;
+
+    compile_ast_with_host_functions(source, &ast, host_functions)
+}
+
 pub fn compile_ast(source: &SourceText, expressions: &[SpannedAst]) -> VmResult<BytecodeProgram> {
     let mut compiler = Compiler::new(source);
+    compiler.compile_expressions(expressions, RESULT_REGISTER)?;
+    compiler.emit(
+        Instruction::Return {
+            src: RESULT_REGISTER,
+        },
+        compiler.unit.last_span,
+    );
+
+    Ok(compiler.finish())
+}
+
+pub fn compile_ast_with_host_functions(
+    source: &SourceText,
+    expressions: &[SpannedAst],
+    host_functions: &HostFunctionRegistry,
+) -> VmResult<BytecodeProgram> {
+    let mut compiler = Compiler::with_host_function_names(source, host_functions.names());
     compiler.compile_expressions(expressions, RESULT_REGISTER)?;
     compiler.emit(
         Instruction::Return {
@@ -313,8 +366,9 @@ fn compile_ast_with_context(
     expressions: &[SpannedAst],
     bindings: Vec<String>,
     functions: Vec<FunctionPrototype>,
+    host_function_names: BTreeSet<String>,
 ) -> VmResult<BytecodeProgram> {
-    let mut compiler = Compiler::with_context(source, bindings, functions);
+    let mut compiler = Compiler::with_context(source, bindings, functions, host_function_names);
     compiler.compile_expressions(expressions, RESULT_REGISTER)?;
     compiler.emit(
         Instruction::Return {
@@ -342,6 +396,8 @@ pub struct VmSession {
     bindings: BTreeMap<String, Value>,
     binding_names: Vec<String>,
     functions: Vec<FunctionPrototype>,
+    host_functions: HostFunctionRegistry,
+    capability_profile: Option<CapabilityProfile>,
 }
 
 impl VmSession {
@@ -351,6 +407,8 @@ impl VmSession {
             bindings: BTreeMap::new(),
             binding_names: Vec::new(),
             functions: Vec::new(),
+            host_functions: HostFunctionRegistry::new(),
+            capability_profile: None,
         }
     }
 
@@ -405,8 +463,16 @@ impl VmSession {
             ast,
             self.binding_names.clone(),
             self.functions.clone(),
+            self.host_functions.names(),
         )?;
-        let run = Interpreter::new_with_bindings(&program, budget, self.bindings.clone()).run()?;
+        let run = Interpreter::new_with_bindings_host_functions_and_profile(
+            &program,
+            budget,
+            self.bindings.clone(),
+            self.host_functions.clone(),
+            self.capability_profile.clone(),
+        )
+        .run()?;
 
         self.bindings = run.bindings;
         self.binding_names = program.bindings.clone();
@@ -421,6 +487,42 @@ impl VmSession {
 
     pub fn binding(&self, name: &str) -> Option<&Value> {
         self.bindings.get(name)
+    }
+
+    pub fn register_host_function<F>(&mut self, spec: HostFunctionSpec, function: F)
+    where
+        F: Fn(&HostCallContext, &[Value]) -> crate::host::HostCallResult + Send + Sync + 'static,
+    {
+        self.host_functions.register_function(spec, function);
+    }
+
+    pub fn with_host_function<F>(mut self, spec: HostFunctionSpec, function: F) -> Self
+    where
+        F: Fn(&HostCallContext, &[Value]) -> crate::host::HostCallResult + Send + Sync + 'static,
+    {
+        self.register_host_function(spec, function);
+        self
+    }
+
+    pub fn host_functions(&self) -> &HostFunctionRegistry {
+        &self.host_functions
+    }
+
+    pub fn set_capability_profile(&mut self, profile: CapabilityProfile) {
+        self.capability_profile = Some(profile);
+    }
+
+    pub fn with_capability_profile(mut self, profile: CapabilityProfile) -> Self {
+        self.set_capability_profile(profile);
+        self
+    }
+
+    pub fn clear_capability_profile(&mut self) {
+        self.capability_profile = None;
+    }
+
+    pub fn capability_profile(&self) -> Option<&CapabilityProfile> {
+        self.capability_profile.as_ref()
     }
 
     pub fn reset(&mut self) {
@@ -441,6 +543,7 @@ struct Compiler<'source> {
     constants: Vec<Value>,
     bindings: Vec<String>,
     functions: Vec<FunctionPrototype>,
+    host_function_names: BTreeSet<String>,
     unit: CompileUnit,
 }
 
@@ -470,6 +573,7 @@ impl<'source> Compiler<'source> {
             constants: Vec::new(),
             bindings: Vec::new(),
             functions: Vec::new(),
+            host_function_names: BTreeSet::new(),
             unit: CompileUnit::new(),
         }
     }
@@ -478,12 +582,28 @@ impl<'source> Compiler<'source> {
         source: &'source SourceText,
         bindings: Vec<String>,
         functions: Vec<FunctionPrototype>,
+        host_function_names: BTreeSet<String>,
     ) -> Self {
         Self {
             source,
             constants: Vec::new(),
             bindings,
             functions,
+            host_function_names,
+            unit: CompileUnit::new(),
+        }
+    }
+
+    fn with_host_function_names(
+        source: &'source SourceText,
+        host_function_names: BTreeSet<String>,
+    ) -> Self {
+        Self {
+            source,
+            constants: Vec::new(),
+            bindings: Vec::new(),
+            functions: Vec::new(),
+            host_function_names,
             unit: CompileUnit::new(),
         }
     }
@@ -666,6 +786,12 @@ impl<'source> Compiler<'source> {
             return self.compile_primitive_call(name, args, dst, span);
         }
 
+        if let AstKind::Symbol { name } = &callee.kind
+            && self.host_function_names.contains(name)
+        {
+            return self.compile_host_call(name, args, dst, span);
+        }
+
         self.compile_function_call(callee, args, Some(dst), span)
     }
 
@@ -680,6 +806,12 @@ impl<'source> Compiler<'source> {
             && is_bootstrap_primitive(name)
         {
             return self.compile_primitive_call(name, args, dst, span);
+        }
+
+        if let AstKind::Symbol { name } = &callee.kind
+            && self.host_function_names.contains(name)
+        {
+            return self.compile_host_call(name, args, dst, span);
         }
 
         self.compile_function_call(callee, args, None, span)
@@ -735,6 +867,31 @@ impl<'source> Compiler<'source> {
             Instruction::CallPrimitive {
                 dst,
                 primitive,
+                args: arg_registers,
+            },
+            span,
+        );
+        Ok(())
+    }
+
+    fn compile_host_call(
+        &mut self,
+        name: &str,
+        args: &[SpannedAst],
+        dst: usize,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        let mut arg_registers = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg_register = self.allocate_register();
+            self.compile_expression(arg, arg_register)?;
+            arg_registers.push(arg_register);
+        }
+        let function = self.intern_binding(name);
+        self.emit(
+            Instruction::CallHost {
+                dst,
+                function,
                 args: arg_registers,
             },
             span,
@@ -1106,6 +1263,8 @@ impl ExecutionFrame {
 struct Interpreter<'program> {
     program: &'program BytecodeProgram,
     budget: VmBudget,
+    host_functions: HostFunctionRegistry,
+    capability_profile: Option<CapabilityProfile>,
     frames: Vec<ExecutionFrame>,
     bindings: BTreeMap<String, Value>,
     instructions_executed: usize,
@@ -1122,14 +1281,46 @@ impl<'program> Interpreter<'program> {
         Self::new_with_bindings(program, budget, BTreeMap::new())
     }
 
+    fn new_with_host_functions(
+        program: &'program BytecodeProgram,
+        budget: VmBudget,
+        host_functions: HostFunctionRegistry,
+    ) -> Self {
+        Self::new_with_bindings_host_functions_and_profile(
+            program,
+            budget,
+            BTreeMap::new(),
+            host_functions,
+            None,
+        )
+    }
+
     fn new_with_bindings(
         program: &'program BytecodeProgram,
         budget: VmBudget,
         bindings: BTreeMap<String, Value>,
     ) -> Self {
+        Self::new_with_bindings_host_functions_and_profile(
+            program,
+            budget,
+            bindings,
+            HostFunctionRegistry::new(),
+            None,
+        )
+    }
+
+    fn new_with_bindings_host_functions_and_profile(
+        program: &'program BytecodeProgram,
+        budget: VmBudget,
+        bindings: BTreeMap<String, Value>,
+        host_functions: HostFunctionRegistry,
+        capability_profile: Option<CapabilityProfile>,
+    ) -> Self {
         Self {
             program,
             budget,
+            host_functions,
+            capability_profile,
             frames: vec![ExecutionFrame::top_level(program.register_count)],
             bindings,
             instructions_executed: 0,
@@ -1174,6 +1365,33 @@ impl<'program> Interpreter<'program> {
         span: SourceSpan,
     ) -> VmResult<()> {
         match instruction {
+            Instruction::LoadConstant { .. }
+            | Instruction::MakeVector { .. }
+            | Instruction::MakeMap { .. }
+            | Instruction::LoadFunction { .. } => {
+                self.execute_value_construction(instruction, span)
+            }
+            Instruction::LoadBinding { .. }
+            | Instruction::DefineBinding { .. }
+            | Instruction::PushLexicalScope
+            | Instruction::BindLocal { .. }
+            | Instruction::PopLexicalScope => self.execute_binding_instruction(instruction, span),
+            Instruction::CallPrimitive { .. }
+            | Instruction::CallHost { .. }
+            | Instruction::CallFunction { .. }
+            | Instruction::TailCallFunction { .. } => {
+                self.execute_call_instruction(instruction, span)
+            }
+            _ => unreachable!("control instructions are handled by execute_instruction"),
+        }
+    }
+
+    fn execute_value_construction(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        match instruction {
             Instruction::LoadConstant { dst, constant } => {
                 let value = self.constant(constant, span)?.clone();
                 self.set_register(dst, value, span)?;
@@ -1189,6 +1407,26 @@ impl<'program> Interpreter<'program> {
                 self.set_register(dst, value, span)?;
                 self.advance_pc()
             }
+            Instruction::LoadFunction { dst, function } => {
+                self.function(function, span)?;
+                let captures = self.current_frame()?.locals.clone();
+                self.set_register(
+                    dst,
+                    Value::Function(FunctionValue::with_captures(function, captures)),
+                    span,
+                )?;
+                self.advance_pc()
+            }
+            _ => unreachable!("only value construction instructions are dispatched here"),
+        }
+    }
+
+    fn execute_binding_instruction(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        match instruction {
             Instruction::LoadBinding { dst, binding } => {
                 let value = self.load_binding(binding, span)?;
                 self.set_register(dst, value, span)?;
@@ -1210,16 +1448,16 @@ impl<'program> Interpreter<'program> {
                 self.pop_lexical_scope(span)?;
                 self.advance_pc()
             }
-            Instruction::LoadFunction { dst, function } => {
-                self.function(function, span)?;
-                let captures = self.current_frame()?.locals.clone();
-                self.set_register(
-                    dst,
-                    Value::Function(FunctionValue::with_captures(function, captures)),
-                    span,
-                )?;
-                self.advance_pc()
-            }
+            _ => unreachable!("only binding instructions are dispatched here"),
+        }
+    }
+
+    fn execute_call_instruction(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        match instruction {
             Instruction::CallPrimitive {
                 dst,
                 primitive,
@@ -1230,13 +1468,23 @@ impl<'program> Interpreter<'program> {
                 self.set_register(dst, value, span)?;
                 self.advance_pc()
             }
+            Instruction::CallHost {
+                dst,
+                function,
+                args,
+            } => {
+                let function_name = self.binding_name(function, span)?.to_string();
+                let value = self.call_host_function(&function_name, &args, span)?;
+                self.set_register(dst, value, span)?;
+                self.advance_pc()
+            }
             Instruction::CallFunction { dst, callee, args } => {
                 self.call_function(dst, callee, &args, span)
             }
             Instruction::TailCallFunction { callee, args } => {
                 self.tail_call_function(callee, &args, span)
             }
-            _ => unreachable!("control instructions are handled by execute_instruction"),
+            _ => unreachable!("only call instructions are dispatched here"),
         }
     }
 
@@ -1557,6 +1805,150 @@ impl<'program> Interpreter<'program> {
                 Some("Report this as a compiler or bytecode construction bug.".to_string()),
             )),
         }
+    }
+
+    fn call_host_function(
+        &self,
+        function_name: &str,
+        args: &[usize],
+        span: SourceSpan,
+    ) -> VmResult<Value> {
+        let function = self
+            .host_functions
+            .get(function_name)
+            .cloned()
+            .ok_or_else(|| {
+                self.runtime_error(
+                    "ANVIL_RUNTIME_HOST_FUNCTION_NOT_FOUND",
+                    format!("host function {function_name} is not registered"),
+                    span,
+                    vec!["registered host function".to_string()],
+                    Some(function_name.to_string()),
+                    Some(
+                        "Register the host function before compiling and running this program."
+                            .to_string(),
+                    ),
+                )
+            })?;
+        let spec = function.spec().clone();
+        self.ensure_host_arity(&spec, args.len(), span)?;
+        self.ensure_host_authority(&spec, span)?;
+
+        let arg_values = self.register_values(args, span)?;
+        let context = HostCallContext::new(&spec, self.capability_profile.as_ref());
+        function
+            .call(&context, &arg_values)
+            .map_err(|failure| self.host_call_failure(&spec, failure, span))
+    }
+
+    fn ensure_host_arity(
+        &self,
+        spec: &HostFunctionSpec,
+        actual: usize,
+        span: SourceSpan,
+    ) -> VmResult<()> {
+        if spec.arity.allows(actual) {
+            return Ok(());
+        }
+
+        Err(self.runtime_error(
+            "ANVIL_RUNTIME_HOST_ARITY",
+            format!(
+                "host function {} expects {}",
+                spec.name,
+                spec.arity.description()
+            ),
+            span,
+            vec![spec.arity.description()],
+            Some(format!("{actual} argument(s)")),
+            Some("Call the host function with the registered parameter count.".to_string()),
+        ))
+    }
+
+    fn ensure_host_authority(&self, spec: &HostFunctionSpec, span: SourceSpan) -> VmResult<()> {
+        if spec.required_capability.is_none() && spec.trust_zone.is_none() {
+            return Ok(());
+        }
+
+        let Some(profile) = &self.capability_profile else {
+            return Err(self.runtime_error(
+                "ANVIL_RUNTIME_HOST_PROFILE_REQUIRED",
+                format!(
+                    "host function {} requires an active capability profile",
+                    spec.name
+                ),
+                span,
+                vec!["active capability profile".to_string()],
+                Some("no capability profile".to_string()),
+                Some("Run the session under a profile that authorizes this host call.".to_string()),
+            ));
+        };
+
+        if let Some(trust_zone) = &spec.trust_zone
+            && !profile.allows_trust_zone(trust_zone)
+        {
+            return Err(self.runtime_error(
+                "ANVIL_RUNTIME_HOST_TRUST_ZONE_DENIED",
+                format!(
+                    "profile {} cannot call host function {}",
+                    profile.profile_id, spec.name
+                ),
+                span,
+                profile
+                    .trust_zones
+                    .iter()
+                    .map(|zone| format!("trust_zone:{zone}"))
+                    .collect(),
+                Some(format!("trust_zone:{trust_zone}")),
+                Some(
+                    "Run in the matching trust zone or register a narrower host facade."
+                        .to_string(),
+                ),
+            ));
+        }
+
+        if let Some(capability) = &spec.required_capability
+            && !profile.allows_capability(capability)
+        {
+            return Err(self.runtime_error(
+                "ANVIL_RUNTIME_HOST_CAPABILITY_DENIED",
+                format!(
+                    "profile {} cannot call host function {}",
+                    profile.profile_id, spec.name
+                ),
+                span,
+                vec![
+                    format!("profile:{}", profile.profile_id),
+                    format!("capability:{capability}"),
+                ],
+                Some(format!("profile:{}", profile.profile_id)),
+                Some("Run under a profile with the required host capability.".to_string()),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn host_call_failure(
+        &self,
+        spec: &HostFunctionSpec,
+        failure: HostCallFailure,
+        span: SourceSpan,
+    ) -> Box<VmDiagnostic> {
+        let expected = if failure.expected.is_empty() {
+            vec!["successful host call".to_string()]
+        } else {
+            failure.expected
+        };
+
+        self.runtime_error(
+            "ANVIL_RUNTIME_HOST_CALL_FAILED",
+            format!("host function {} failed: {}", spec.name, failure.message),
+            span,
+            expected,
+            failure.actual,
+            failure.suggestion,
+        )
     }
 
     fn register_values(&self, args: &[usize], span: SourceSpan) -> VmResult<Vec<Value>> {
@@ -1933,10 +2325,32 @@ fn value_type_name(value: &Value) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
 
     fn run_value(source: &str) -> Value {
         run_source(source).expect("VM output").value
+    }
+
+    fn host_add_spec() -> HostFunctionSpec {
+        HostFunctionSpec::new("host/add").with_exact_arity(2)
+    }
+
+    fn register_host_add(session: &mut VmSession, calls: Arc<AtomicUsize>) {
+        session.register_host_function(host_add_spec(), move |_context, args| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let [Value::Integer(left), Value::Integer(right)] = args else {
+                return Err(HostCallFailure::new("host/add expects integer arguments")
+                    .with_expected("integer arguments")
+                    .with_actual(format!("{} argument(s)", args.len())));
+            };
+
+            Ok(Value::Integer(left + right))
+        });
     }
 
     fn bytecode(instructions: Vec<Instruction>, constants: Vec<Value>) -> BytecodeProgram {
@@ -2109,6 +2523,285 @@ mod tests {
             Value::Integer(42)
         );
         assert_eq!(session.binding("answer"), Some(&Value::Integer(42)));
+    }
+
+    #[test]
+    fn vm_session_calls_registered_host_functions() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut session = VmSession::new();
+        register_host_add(&mut session, calls.clone());
+
+        let output = session
+            .eval_source("(host/add 40 2)")
+            .expect("host call output");
+
+        assert_eq!(output.value, Value::Integer(42));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn vm_session_host_calls_can_run_in_tail_position() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut session = VmSession::new();
+        register_host_add(&mut session, calls.clone());
+
+        let output = session
+            .eval_source("((fn [x] (host/add x 2)) 40)")
+            .expect("host call output");
+
+        assert_eq!(output.value, Value::Integer(42));
+        assert_eq!(output.max_call_depth, 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn host_functions_are_compiled_as_host_call_bytecode() {
+        let registry = HostFunctionRegistry::new()
+            .with_function(host_add_spec(), |_context, _args| Ok(Value::Nil));
+        let program =
+            compile_source_with_host_functions("(host/add 1 2)", &registry).expect("host bytecode");
+
+        assert!(matches!(
+            program.instructions[2].instruction,
+            Instruction::CallHost { .. }
+        ));
+    }
+
+    #[test]
+    fn standalone_vm_can_run_precompiled_host_calls() {
+        let registry =
+            HostFunctionRegistry::new().with_function(host_add_spec(), |_context, args| {
+                let [Value::Integer(left), Value::Integer(right)] = args else {
+                    return Err(HostCallFailure::new("expected integer arguments"));
+                };
+                Ok(Value::Integer(left + right))
+            });
+        let source = SourceText::new("host-call", "(host/add 40 2)");
+        let program = compile_source_text_with_host_functions(&source, &registry)
+            .expect("compiled host call");
+
+        let output = Vm::new()
+            .run_with_host_functions(&program, registry)
+            .expect("host call output");
+
+        assert_eq!(output.value, Value::Integer(42));
+    }
+
+    #[test]
+    fn missing_runtime_host_registration_is_diagnosed() {
+        let registry = HostFunctionRegistry::new()
+            .with_function(host_add_spec(), |_context, _args| Ok(Value::Nil));
+        let program =
+            compile_source_with_host_functions("(host/add 1 2)", &registry).expect("host bytecode");
+
+        let diagnostic = Vm::new()
+            .run_with_host_functions(&program, HostFunctionRegistry::new())
+            .expect_err("missing runtime host function");
+
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_HOST_FUNCTION_NOT_FOUND");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Runtime);
+    }
+
+    #[test]
+    fn vm_session_host_accessors_preserve_session_authority() {
+        let profile = CapabilityProfile::new("math", "agent.alpha", "project.markodb")
+            .with_capability("host/math");
+        let mut session = VmSession::with_budget(VmBudget::unlimited())
+            .with_host_function(
+                host_add_spec().with_required_capability("host/math"),
+                |_context, _args| Ok(Value::Integer(42)),
+            )
+            .with_capability_profile(profile);
+
+        assert!(session.host_functions().contains("host/add"));
+        assert_eq!(
+            session
+                .capability_profile()
+                .map(|profile| profile.profile_id.as_str()),
+            Some("math")
+        );
+
+        let source = SourceText::new("manual-ast", "(host/add 1 2)");
+        let ast = lower_source_text(&source).expect("host call AST");
+        assert_eq!(
+            session
+                .eval_ast_source_text(&source, &ast)
+                .expect("manual AST evaluation")
+                .value,
+            Value::Integer(42)
+        );
+
+        session.clear_capability_profile();
+        assert!(session.capability_profile().is_none());
+    }
+
+    #[test]
+    fn registered_host_function_arity_is_checked_before_calling_host() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut session = VmSession::new();
+        register_host_add(&mut session, calls.clone());
+
+        let diagnostic = session
+            .eval_source("(host/add 1)")
+            .expect_err("host arity diagnostic");
+
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_HOST_ARITY");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Runtime);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn required_host_profiles_are_checked_before_calling_host() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_host = calls.clone();
+        let mut session = VmSession::new();
+        session.register_host_function(
+            HostFunctionSpec::new("host/secret")
+                .with_exact_arity(0)
+                .with_required_capability("host/secret")
+                .with_trust_zone("project.markodb"),
+            move |_context, _args| {
+                calls_for_host.fetch_add(1, Ordering::SeqCst);
+                Ok(Value::String("secret".to_string()))
+            },
+        );
+
+        let diagnostic = session
+            .eval_source("(host/secret)")
+            .expect_err("profile required diagnostic");
+
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_HOST_PROFILE_REQUIRED");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn capability_profiles_can_deny_host_calls_before_invocation() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_host = calls.clone();
+        let mut session = VmSession::new().with_capability_profile(
+            CapabilityProfile::new("readonly", "agent.alpha", "project.markodb")
+                .with_capability("host/read"),
+        );
+        session.register_host_function(
+            HostFunctionSpec::new("host/secret")
+                .with_exact_arity(0)
+                .with_required_capability("host/secret")
+                .with_trust_zone("project.markodb"),
+            move |_context, _args| {
+                calls_for_host.fetch_add(1, Ordering::SeqCst);
+                Ok(Value::String("secret".to_string()))
+            },
+        );
+
+        let diagnostic = session
+            .eval_source("(host/secret)")
+            .expect_err("capability diagnostic");
+
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_HOST_CAPABILITY_DENIED");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Runtime);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn capability_profiles_can_deny_host_calls_by_trust_zone() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_host = calls.clone();
+        let mut session = VmSession::new().with_capability_profile(
+            CapabilityProfile::new("readonly", "agent.alpha", "project.other")
+                .with_capability("host/secret"),
+        );
+        session.register_host_function(
+            HostFunctionSpec::new("host/secret")
+                .with_exact_arity(0)
+                .with_required_capability("host/secret")
+                .with_trust_zone("project.markodb"),
+            move |_context, _args| {
+                calls_for_host.fetch_add(1, Ordering::SeqCst);
+                Ok(Value::String("secret".to_string()))
+            },
+        );
+
+        let diagnostic = session
+            .eval_source("(host/secret)")
+            .expect_err("trust-zone diagnostic");
+
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_HOST_TRUST_ZONE_DENIED");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Runtime);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn capability_profiles_can_authorize_host_calls() {
+        let mut session = VmSession::new().with_capability_profile(
+            CapabilityProfile::new("math", "agent.alpha", "project.markodb")
+                .with_capability("host/math"),
+        );
+        session.register_host_function(
+            host_add_spec()
+                .with_required_capability("host/math")
+                .with_trust_zone("project.markodb"),
+            |_context, args| {
+                let [Value::Integer(left), Value::Integer(right)] = args else {
+                    return Err(HostCallFailure::new("expected integer arguments"));
+                };
+                Ok(Value::Integer(left + right))
+            },
+        );
+
+        let output = session
+            .eval_source("(host/add 40 2)")
+            .expect("authorized host call");
+
+        assert_eq!(output.value, Value::Integer(42));
+    }
+
+    #[test]
+    fn host_failures_return_runtime_diagnostics_without_corrupting_session() {
+        let mut session = VmSession::new();
+        session
+            .eval_source("(define answer 42)")
+            .expect("initial binding");
+        session.register_host_function(
+            HostFunctionSpec::new("host/flaky").with_exact_arity(0),
+            |_context, _args| {
+                Err(HostCallFailure::new("backend timeout")
+                    .with_expected("available backend")
+                    .with_actual("timeout")
+                    .with_suggestion("Retry the host call or inspect the backend."))
+            },
+        );
+
+        let diagnostic = session
+            .eval_source("(host/flaky)")
+            .expect_err("host failure diagnostic");
+
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_HOST_CALL_FAILED");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Runtime);
+        assert_eq!(
+            session
+                .eval_source("answer")
+                .expect("session survived")
+                .value,
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn host_failures_without_details_use_default_diagnostic_fields() {
+        let mut session = VmSession::new();
+        session.register_host_function(
+            HostFunctionSpec::new("host/flaky").with_exact_arity(0),
+            |_context, _args| Err(HostCallFailure::new("backend unavailable")),
+        );
+
+        let diagnostic = session
+            .eval_source("(host/flaky)")
+            .expect_err("host failure diagnostic");
+
+        assert_eq!(diagnostic.code, "ANVIL_RUNTIME_HOST_CALL_FAILED");
+        assert_eq!(diagnostic.expected, vec!["successful host call"]);
+        assert_eq!(diagnostic.actual, None);
+        assert!(diagnostic.message.contains("backend unavailable"));
     }
 
     #[test]

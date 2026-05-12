@@ -24,11 +24,24 @@ Implementation-facing decision:
   `docs/decisions/resource-adapter-execution.md`: runtime checks happen before
   adapter calls, and adapter outcomes/failures return through structured
   resource envelopes.
+- The first executable host-function slice is synchronous and explicit:
+  `HostFunctionRegistry` stores registered Rust callbacks by name,
+  `HostFunctionSpec` declares arity plus optional required capability and trust
+  zone, and `VmSession`/`ModuleSession` expose registration methods.
+- Direct calls to registered host-function names compile to a dedicated
+  bytecode instruction. Arity, trust-zone, and capability checks happen before
+  invoking Rust host code. Denials and host callback failures become structured
+  VM runtime diagnostics rather than host-language transport errors.
+- Host functions are not ordinary first-class Anvil values yet. The current
+  contract is a direct-call import surface for embedded runtimes; first-class
+  handles, async calls, streams, actor-backed services, and typed signatures are
+  later host-facade work.
 - The facade should not expose GC objects, scheduler internals, raw frames, raw
   Rust pointers, or unmediated host resources.
 - Ordinary language failures, denials, approvals, timeouts, and budget
   exhaustion return the structured Anvil response envelope. Transport failures
   and runtime corruption are host-language errors.
 
-Open implementation dependency: value serialization and the response/facet
-retention model need concrete Rust types before transport adapters can be built.
+Open implementation dependency: value serialization, typed host signatures,
+async/streaming host runners, and the response/facet retention model need
+concrete Rust types before transport adapters can be built.

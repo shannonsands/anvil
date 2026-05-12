@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     ast::{AstKind, RequireImport, SpannedAst, lower_source_text_with_resolver},
+    capability::CapabilityProfile,
     diagnostic::{Diagnostic, DiagnosticPhase, DiagnosticSpec},
     draft::DraftOverlay,
+    host::{HostCallContext, HostCallResult, HostFunctionRegistry, HostFunctionSpec},
     module::{ModuleResolution, ModuleResolver, ModuleRootKind, ModuleSource},
     project::{PackageSnapshot, WorkspaceSnapshot},
     source::{SourceSpan, SourceText},
@@ -137,8 +139,40 @@ impl ModuleSession {
         &self.vm
     }
 
+    pub fn vm_mut(&mut self) -> &mut VmSession {
+        &mut self.vm
+    }
+
     pub fn binding(&self, name: &str) -> Option<&Value> {
         self.vm.binding(name)
+    }
+
+    pub fn register_host_function<F>(&mut self, spec: HostFunctionSpec, function: F)
+    where
+        F: Fn(&HostCallContext, &[Value]) -> HostCallResult + Send + Sync + 'static,
+    {
+        self.vm.register_host_function(spec, function);
+    }
+
+    pub fn with_host_function<F>(mut self, spec: HostFunctionSpec, function: F) -> Self
+    where
+        F: Fn(&HostCallContext, &[Value]) -> HostCallResult + Send + Sync + 'static,
+    {
+        self.register_host_function(spec, function);
+        self
+    }
+
+    pub fn host_functions(&self) -> &HostFunctionRegistry {
+        self.vm.host_functions()
+    }
+
+    pub fn set_capability_profile(&mut self, profile: CapabilityProfile) {
+        self.vm.set_capability_profile(profile);
+    }
+
+    pub fn with_capability_profile(mut self, profile: CapabilityProfile) -> Self {
+        self.set_capability_profile(profile);
+        self
     }
 
     pub fn resolver(&self) -> &ModuleResolver {
@@ -342,7 +376,10 @@ fn join_workspace_path(member_path: &str, source_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{draft::DraftOverlay, parse_manifest, project::WorkspaceMemberSnapshot};
+    use crate::{
+        draft::DraftOverlay, host::HostCallFailure, parse_manifest,
+        project::WorkspaceMemberSnapshot,
+    };
 
     fn planner_package() -> PackageSnapshot {
         let manifest = parse_manifest(
@@ -513,6 +550,35 @@ mod tests {
             .expect("budgeted source text evaluation");
         assert_eq!(output.value, Value::Integer(42));
         assert_eq!(session.vm().binding("answer"), Some(&Value::Integer(42)));
+    }
+
+    #[test]
+    fn host_functions_and_profiles_pass_through_to_vm_session() {
+        let profile = CapabilityProfile::new("math", "agent.alpha", "project.markodb")
+            .with_capability("host/math");
+        let mut session = ModuleSession::new()
+            .with_host_function(
+                HostFunctionSpec::new("host/add")
+                    .with_exact_arity(2)
+                    .with_required_capability("host/math")
+                    .with_trust_zone("project.markodb"),
+                |_context, args| {
+                    let [Value::Integer(left), Value::Integer(right)] = args else {
+                        return Err(HostCallFailure::new("expected integer arguments"));
+                    };
+                    Ok(Value::Integer(left + right))
+                },
+            )
+            .with_capability_profile(profile);
+
+        assert!(session.host_functions().contains("host/add"));
+        assert!(session.vm().capability_profile().is_some());
+        assert!(session.vm_mut().host_functions().contains("host/add"));
+
+        let output = session
+            .eval_source("(host/add 40 2)")
+            .expect("module host function call");
+        assert_eq!(output.value, Value::Integer(42));
     }
 
     #[test]

@@ -2,6 +2,7 @@ pub mod ast;
 pub mod capability;
 pub mod diagnostic;
 pub mod draft;
+pub mod host;
 pub mod manifest;
 pub mod module;
 pub mod module_session;
@@ -24,6 +25,10 @@ pub use diagnostic::{
     DiagnosticSuggestion,
 };
 pub use draft::{DraftModule, DraftOverlay, DraftStatus};
+pub use host::{
+    HostCallContext, HostCallFailure, HostCallResult, HostFunction, HostFunctionArity,
+    HostFunctionRegistry, HostFunctionSpec, RegisteredHostFunction,
+};
 pub use manifest::{
     AnvilManifest, LibraryManifest, ManifestDiagnostic, PackageManifest, SourceRoots,
     WorkspaceManifest, parse_manifest, parse_manifest_text,
@@ -59,8 +64,9 @@ pub use syntax::{
 };
 pub use vm::{
     BytecodeInstruction, BytecodeProgram, Instruction, MapRegisterEntry, Value, ValueMapEntry, Vm,
-    VmBudget, VmDiagnostic, VmOutput, VmSession, compile_ast, compile_source, compile_source_text,
-    run_source, run_source_text,
+    VmBudget, VmDiagnostic, VmOutput, VmSession, compile_ast, compile_ast_with_host_functions,
+    compile_source, compile_source_text, compile_source_text_with_host_functions,
+    compile_source_with_host_functions, run_source, run_source_text,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

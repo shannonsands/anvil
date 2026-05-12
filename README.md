@@ -23,6 +23,9 @@ planning workspace lives at:
   bindings and function tables across successful interactions.
 - Module-aware sessions can load package/workspace sources for require-prefix
   forms, including CLI `run --package DIR` and `repl --package DIR`.
+- Rust hosts can register initial synchronous host functions on VM/module
+  sessions, with arity checks, capability-profile checks, and structured
+  runtime diagnostics before host callbacks run.
 - Agent REPL, debugger, and runtime attach are core product surfaces.
 - Capability-aware runtime kernel, process/task isolation, and auditable
   resource handles.

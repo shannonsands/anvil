@@ -85,6 +85,10 @@ The first executable acceptance harness is intentionally tiny but real:
 - `capability_profiles.feature` covers process-profile mediation for resource
   open, adapter execution, delegation, and revocation, including
   `capability_denied` diagnostics and zero adapter calls on denied operations.
+- `host_functions.feature` covers the first embedded host-function contract:
+  direct calls from VM sessions, calls from required modules, arity/profile
+  mediation before callback invocation, authorized host calls, and host
+  callback failures mapped into VM runtime diagnostics.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as

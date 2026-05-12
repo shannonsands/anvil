@@ -91,8 +91,7 @@ Current slice:
   intact when a required module fails.
 - CLI `run --package DIR` and `repl --package DIR` use module-aware sessions.
 - Unsupported executable forms outside that session wrapper should fail with
-  compile-phase diagnostics until host calls and resource handles have their
-  runtime contracts.
+  compile-phase diagnostics until their runtime contracts are implemented.
 - The final value direction is now locked as tracing-GC-managed immutable
   language values with explicit mutable abstractions and supervisor-owned
   resource handles outside the ordinary heap.
@@ -126,3 +125,11 @@ Current implementation slice:
   for open, use, adapter execution, delegation, and revocation.
 - `capability_profiles.feature` covers `capability_denied` diagnostics,
   missing-capability reporting, revocation, and denial before adapter calls.
+- `anvil-core` now has an initial synchronous `HostFunctionRegistry`,
+  `HostFunctionSpec`, and host-call bytecode path. VM and module sessions can
+  register Rust callbacks by explicit name, with arity checks,
+  capability-profile checks, structured host-failure diagnostics, and denial
+  before callback invocation.
+- `host_functions.feature` covers direct VM calls, required-module calls,
+  capability denial before invocation, authorized calls, and host callback
+  failure diagnostics.

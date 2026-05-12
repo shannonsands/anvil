@@ -1,23 +1,26 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use anvil_core::{
     AnvilManifest, AstDiagnostic, CapabilityProfile, DraftOverlay, HandleDelegationPolicy,
-    HandleEntry, HandleTable, ManifestDiagnostic, ModuleDiagnostic, ModuleResolution,
-    ModuleResolver, ModuleRootKind, ModuleSession, PackageSnapshot, PackageSourceFile,
-    ProjectDiagnostic, ReplInteraction, ReplResponse, ReplSession, ResourceAdapter,
-    ResourceAdapterFailure, ResourceAdapterOutcome, ResourceAdapterRequest, ResourceAdapterResult,
-    ResourceDelegationRequest, ResourceEffect, ResourceEffectRecord, ResourceEntry, ResourceError,
-    ResourceExecutionMode, ResourceOpenRequest, ResourceOperationAuthorization,
-    ResourceOperationOutcome, ResourceOperationRequest, ResourceRegistry, SpannedAst,
-    SyntaxDiagnostic, SyntaxObject, Value, Vm, VmBudget, VmDiagnostic, VmOutput, VmSession,
-    compile_source, format_ast, format_datums, load_package_snapshot, load_workspace_snapshot,
-    lower_source, lower_source_with_resolver, parse_manifest, read_repl_input, run_source,
-    syntax_from_source,
+    HandleEntry, HandleTable, HostCallContext, HostCallFailure, HostFunctionSpec,
+    ManifestDiagnostic, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
+    ModuleSession, PackageSnapshot, PackageSourceFile, ProjectDiagnostic, ReplInteraction,
+    ReplResponse, ReplSession, ResourceAdapter, ResourceAdapterFailure, ResourceAdapterOutcome,
+    ResourceAdapterRequest, ResourceAdapterResult, ResourceDelegationRequest, ResourceEffect,
+    ResourceEffectRecord, ResourceEntry, ResourceError, ResourceExecutionMode, ResourceOpenRequest,
+    ResourceOperationAuthorization, ResourceOperationOutcome, ResourceOperationRequest,
+    ResourceRegistry, SpannedAst, SyntaxDiagnostic, SyntaxObject, Value, Vm, VmBudget,
+    VmDiagnostic, VmOutput, VmSession, compile_source, format_ast, format_datums,
+    load_package_snapshot, load_workspace_snapshot, lower_source, lower_source_with_resolver,
+    parse_manifest, read_repl_input, run_source, syntax_from_source,
 };
 use cucumber::{World as _, gherkin::Step, given, then, when};
 
@@ -57,6 +60,7 @@ struct AnvilWorld {
     resource_operation_outcome: Option<ResourceOperationOutcome>,
     resource_error: Option<Box<ResourceError>>,
     capability_profile: Option<CapabilityProfile>,
+    host_function_calls: Arc<AtomicUsize>,
 }
 
 impl Drop for AnvilWorld {
@@ -548,6 +552,7 @@ async fn fresh_vm_session(world: &mut AnvilWorld) {
     world.vm_session = VmSession::new();
     world.vm_output = None;
     world.vm_diagnostic = None;
+    reset_host_call_count(world);
 }
 
 #[given("a fresh module session")]
@@ -556,6 +561,114 @@ async fn fresh_module_session(world: &mut AnvilWorld) {
     world.vm_output = None;
     world.vm_diagnostic = None;
     world.module_diagnostic = None;
+    reset_host_call_count(world);
+}
+
+#[given(expr = "host function {string} is registered")]
+async fn host_function_is_registered(world: &mut AnvilWorld, name: String) {
+    register_host_add(
+        &mut world.vm_session,
+        &name,
+        Arc::clone(&world.host_function_calls),
+    );
+    register_module_host_add(
+        &mut world.module_session,
+        &name,
+        Arc::clone(&world.host_function_calls),
+    );
+}
+
+#[given(
+    expr = "host function {string} requiring capability {string} in trust zone {string} is registered"
+)]
+async fn host_function_requiring_capability_is_registered(
+    world: &mut AnvilWorld,
+    name: String,
+    capability: String,
+    trust_zone: String,
+) {
+    let spec = HostFunctionSpec::new(name.clone())
+        .with_exact_arity(0)
+        .with_required_capability(capability)
+        .with_trust_zone(trust_zone);
+    let calls = Arc::clone(&world.host_function_calls);
+    world
+        .vm_session
+        .register_host_function(spec.clone(), move |_context, _args| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(Value::Keyword("authorized".to_string()))
+        });
+
+    let calls = Arc::clone(&world.host_function_calls);
+    world
+        .module_session
+        .register_host_function(spec, move |_context, _args| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(Value::Keyword("authorized".to_string()))
+        });
+}
+
+#[given(expr = "failing host function {string} is registered with message {string}")]
+async fn failing_host_function_is_registered(
+    world: &mut AnvilWorld,
+    name: String,
+    message: String,
+) {
+    let spec = HostFunctionSpec::new(name).with_exact_arity(0);
+    let calls = Arc::clone(&world.host_function_calls);
+    let vm_message = message.clone();
+    world
+        .vm_session
+        .register_host_function(spec.clone(), move |_context, _args| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Err(HostCallFailure::new(vm_message.clone()))
+        });
+
+    let calls = Arc::clone(&world.host_function_calls);
+    world
+        .module_session
+        .register_host_function(spec, move |_context, _args| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Err(HostCallFailure::new(message.clone()))
+        });
+}
+
+#[given(
+    expr = "the VM session uses capability profile {string} for principal {string} in trust zone {string} with capabilities {string}"
+)]
+async fn vm_session_uses_capability_profile(
+    world: &mut AnvilWorld,
+    profile_id: String,
+    principal: String,
+    trust_zone: String,
+    capabilities: String,
+) {
+    world.vm_session.set_capability_profile(capability_profile(
+        profile_id,
+        principal,
+        trust_zone,
+        capabilities,
+    ));
+}
+
+#[given(
+    expr = "the module session uses capability profile {string} for principal {string} in trust zone {string} with capabilities {string}"
+)]
+async fn module_session_uses_capability_profile(
+    world: &mut AnvilWorld,
+    profile_id: String,
+    principal: String,
+    trust_zone: String,
+    capabilities: String,
+) {
+    world
+        .module_session
+        .set_capability_profile(capability_profile(
+            profile_id,
+            principal,
+            trust_zone,
+            capabilities,
+        ));
 }
 
 #[when("the VM session evaluates the input")]
@@ -1483,6 +1596,11 @@ async fn resource_adapter_call_count_is(world: &mut AnvilWorld, expected: usize)
     assert_eq!(adapter.calls, expected);
 }
 
+#[then(expr = "the host function call count is {int}")]
+async fn host_function_call_count_is(world: &mut AnvilWorld, expected: usize) {
+    assert_eq!(world.host_function_calls.load(Ordering::Relaxed), expected);
+}
+
 #[then(expr = "the resource adapter output status is {string}")]
 async fn resource_adapter_output_status_is(world: &mut AnvilWorld, expected: String) {
     let outcome = resource_operation_outcome(world);
@@ -1515,6 +1633,49 @@ fn resource_operation_outcome(world: &mut AnvilWorld) -> &ResourceOperationOutco
 
 fn resource_error(world: &mut AnvilWorld) -> &ResourceError {
     world.resource_error.as_ref().expect("resource error")
+}
+
+fn reset_host_call_count(world: &mut AnvilWorld) {
+    world.host_function_calls.store(0, Ordering::Relaxed);
+}
+
+fn register_host_add(session: &mut VmSession, name: &str, calls: Arc<AtomicUsize>) {
+    session.register_host_function(
+        HostFunctionSpec::new(name).with_exact_arity(2),
+        move |_context: &HostCallContext, args: &[Value]| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            host_add(args)
+        },
+    );
+}
+
+fn register_module_host_add(session: &mut ModuleSession, name: &str, calls: Arc<AtomicUsize>) {
+    session.register_host_function(
+        HostFunctionSpec::new(name).with_exact_arity(2),
+        move |_context: &HostCallContext, args: &[Value]| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            host_add(args)
+        },
+    );
+}
+
+fn host_add(args: &[Value]) -> Result<Value, HostCallFailure> {
+    match args {
+        [Value::Integer(left), Value::Integer(right)] => Ok(Value::Integer(left + right)),
+        _ => Err(HostCallFailure::new("host/add expected integer arguments")
+            .with_expected("integer")
+            .with_actual(format!("{args:?}"))),
+    }
+}
+
+fn capability_profile(
+    profile_id: String,
+    principal: String,
+    trust_zone: String,
+    capabilities: String,
+) -> CapabilityProfile {
+    CapabilityProfile::new(profile_id, principal, trust_zone)
+        .with_capabilities(split_csv(&capabilities))
 }
 
 #[derive(Debug, Clone)]
