@@ -21,6 +21,8 @@ planning workspace lives at:
   calls, source-mapped compile/runtime diagnostics, and instruction fuel.
 - Stateful `VmSession` evaluation for REPL/host surfaces, preserving top-level
   bindings and function tables across successful interactions.
+- Module-aware sessions can load package/workspace sources for require-prefix
+  forms, including CLI `run --package DIR` and `repl --package DIR`.
 - Agent REPL, debugger, and runtime attach are core product surfaces.
 - Capability-aware runtime kernel, process/task isolation, and auditable
   resource handles.

@@ -4,6 +4,7 @@ pub mod diagnostic;
 pub mod draft;
 pub mod manifest;
 pub mod module;
+pub mod module_session;
 pub mod project;
 pub mod reader;
 pub mod repl;
@@ -31,6 +32,7 @@ pub use module::{
     ModuleCandidate, ModuleDiagnostic, ModuleResolution, ModuleResolver, ModuleRootKind,
     ModuleSource,
 };
+pub use module_session::{ModuleExecutionDiagnostic, ModuleExecutionResult, ModuleSession};
 pub use project::{
     PackageSnapshot, PackageSourceFile, ProjectDiagnostic, ProjectResult, WorkspaceMemberSnapshot,
     WorkspaceSnapshot, load_package_snapshot, load_workspace_snapshot, package_module_sources,

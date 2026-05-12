@@ -1,13 +1,14 @@
 use std::{
     env,
     io::{self, IsTerminal, Read, Write},
+    path::Path,
     process::ExitCode,
 };
 
 use anvil_core::{
-    EvaluationStatus, ReaderDiagnostic, ReplInteraction, ReplResponse, ReplSession, SpannedAst,
-    SyntaxObject, VmOutput, lower_source, project_shape, read_repl_input, run_source,
-    syntax_from_source,
+    EvaluationStatus, ModuleSession, ReaderDiagnostic, ReplInteraction, ReplResponse, ReplSession,
+    SpannedAst, SyntaxObject, VmOutput, load_workspace_snapshot, lower_source, project_shape,
+    read_repl_input, run_source, syntax_from_source,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +20,7 @@ enum OutputFormat {
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
-        Some("repl") => match parse_output_format(args.collect()).and_then(run_repl) {
+        Some("repl") => match parse_repl_args(args.collect()).and_then(run_repl) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("anvil: {error}");
@@ -65,7 +66,7 @@ fn main() -> ExitCode {
         }
         None => {
             print_project_shape();
-            println!("Run `anvil-cli repl` for the reader-backed REPL.");
+            println!("Run `anvil-cli repl` for the VM-backed REPL.");
             ExitCode::SUCCESS
         }
     }
@@ -92,13 +93,30 @@ fn print_help() {
     println!();
     println!("Options:");
     println!("  --json        Emit one JSON response object per input.");
+    println!("  --package DIR Load Anvil.toml modules from DIR for repl/run.");
 }
 
-fn parse_output_format(args: Vec<String>) -> io::Result<OutputFormat> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReplOptions {
+    format: OutputFormat,
+    package_root: Option<String>,
+}
+
+fn parse_repl_args(args: Vec<String>) -> io::Result<ReplOptions> {
     let mut format = OutputFormat::Text;
-    for arg in args {
+    let mut package_root = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--json" => format = OutputFormat::Json,
+            "--package" | "--project" => {
+                package_root = Some(args.next().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("missing path for {arg}"),
+                    )
+                })?);
+            }
             other => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -107,15 +125,22 @@ fn parse_output_format(args: Vec<String>) -> io::Result<OutputFormat> {
             }
         }
     }
-    Ok(format)
+    Ok(ReplOptions {
+        format,
+        package_root,
+    })
 }
 
-fn run_repl(format: OutputFormat) -> io::Result<()> {
+fn run_repl(options: ReplOptions) -> io::Result<()> {
     let stdin = io::stdin();
     let interactive = stdin.is_terminal();
+    let format = options.format;
     print_repl_banner(interactive, format);
 
-    let mut session = ReplSession::new();
+    let mut session = match options.package_root {
+        Some(root) => ReplSession::with_module_session(load_module_session(root)?),
+        None => ReplSession::new(),
+    };
     while let Some(line) = read_repl_line(&stdin, &mut session, interactive, format)? {
         if is_repl_quit(&line) {
             break;
@@ -239,7 +264,7 @@ fn ast_command(args: Vec<String>) -> io::Result<()> {
 }
 
 fn run_command(args: Vec<String>) -> io::Result<()> {
-    let (format, args) = split_source_args(args)?;
+    let (format, package_root, args) = split_run_args(args)?;
     let source = if args.is_empty() {
         let mut source = String::new();
         io::stdin().read_to_string(&mut source)?;
@@ -248,9 +273,18 @@ fn run_command(args: Vec<String>) -> io::Result<()> {
         args.join(" ")
     };
 
-    match run_source(&source) {
-        Ok(output) => print_run_response(&output, format)?,
-        Err(diagnostic) => print_run_diagnostic(&diagnostic, format)?,
+    match package_root {
+        Some(root) => {
+            let mut session = load_module_session(root)?;
+            match session.eval_source(&source) {
+                Ok(output) => print_run_response(&output, format)?,
+                Err(diagnostic) => print_run_diagnostic(&diagnostic, format)?,
+            }
+        }
+        None => match run_source(&source) {
+            Ok(output) => print_run_response(&output, format)?,
+            Err(diagnostic) => print_run_diagnostic(&diagnostic, format)?,
+        },
     }
     Ok(())
 }
@@ -272,6 +306,38 @@ fn split_source_args(args: Vec<String>) -> io::Result<(OutputFormat, Vec<String>
     }
 
     Ok((format, source_args))
+}
+
+fn split_run_args(args: Vec<String>) -> io::Result<(OutputFormat, Option<String>, Vec<String>)> {
+    let mut format = OutputFormat::Text;
+    let mut package_root = None;
+    let mut source_args = Vec::new();
+    let mut args = args.into_iter();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--json" => format = OutputFormat::Json,
+            "--package" | "--project" => {
+                package_root = Some(args.next().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("missing path for {arg}"),
+                    )
+                })?);
+            }
+            _ => source_args.push(arg),
+        }
+    }
+
+    Ok((format, package_root, source_args))
+}
+
+fn load_module_session(root: impl AsRef<Path>) -> io::Result<ModuleSession> {
+    load_workspace_snapshot(root)
+        .map(|snapshot| ModuleSession::with_workspace_snapshot(&snapshot))
+        .map_err(|diagnostic| {
+            io::Error::new(io::ErrorKind::InvalidInput, diagnostic.render_code_frame())
+        })
 }
 
 #[derive(serde::Serialize)]

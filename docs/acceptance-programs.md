@@ -65,6 +65,9 @@ The first executable acceptance harness is intentionally tiny but real:
 - `workspace_loading.feature` covers workspace member loading from
   `[workspace].members`, root-package precedence over workspace members, missing
   member manifests, and ambiguous workspace module diagnostics.
+- `module_execution.feature` covers the first module-aware session execution:
+  require-prefix package modules, transitive requires, loaded module tracking,
+  failure isolation, cycle diagnostics, and explicit alias deferral.
 - `bytecode_vm.feature` covers the first executable VM behavior: running
   literals, expression sequences, `if`, quote-as-data, vectors, maps, top-level
   bindings, function calls, closures, proper tail calls, lexical `let`

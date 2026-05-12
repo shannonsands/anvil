@@ -383,9 +383,26 @@ impl VmSession {
         budget: VmBudget,
     ) -> VmResult<VmOutput> {
         let ast = lower_source_text(source)?;
+        self.eval_ast_source_text_with_budget(source, &ast, budget)
+    }
+
+    pub fn eval_ast_source_text(
+        &mut self,
+        source: &SourceText,
+        ast: &[SpannedAst],
+    ) -> VmResult<VmOutput> {
+        self.eval_ast_source_text_with_budget(source, ast, self.budget)
+    }
+
+    pub fn eval_ast_source_text_with_budget(
+        &mut self,
+        source: &SourceText,
+        ast: &[SpannedAst],
+        budget: VmBudget,
+    ) -> VmResult<VmOutput> {
         let program = compile_ast_with_context(
             source,
-            &ast,
+            ast,
             self.binding_names.clone(),
             self.functions.clone(),
         )?;

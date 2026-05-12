@@ -8,9 +8,9 @@ use std::{
 use anvil_core::{
     AnvilManifest, AstDiagnostic, CapabilityProfile, DraftOverlay, HandleDelegationPolicy,
     HandleEntry, HandleTable, ManifestDiagnostic, ModuleDiagnostic, ModuleResolution,
-    ModuleResolver, ModuleRootKind, PackageSnapshot, PackageSourceFile, ProjectDiagnostic,
-    ReplInteraction, ReplResponse, ReplSession, ResourceAdapter, ResourceAdapterFailure,
-    ResourceAdapterOutcome, ResourceAdapterRequest, ResourceAdapterResult,
+    ModuleResolver, ModuleRootKind, ModuleSession, PackageSnapshot, PackageSourceFile,
+    ProjectDiagnostic, ReplInteraction, ReplResponse, ReplSession, ResourceAdapter,
+    ResourceAdapterFailure, ResourceAdapterOutcome, ResourceAdapterRequest, ResourceAdapterResult,
     ResourceDelegationRequest, ResourceEffect, ResourceEffectRecord, ResourceEntry, ResourceError,
     ResourceExecutionMode, ResourceOpenRequest, ResourceOperationAuthorization,
     ResourceOperationOutcome, ResourceOperationRequest, ResourceRegistry, SpannedAst,
@@ -44,6 +44,7 @@ struct AnvilWorld {
     package_sources: Vec<PackageSourceFile>,
     filesystem_package_root: Option<PathBuf>,
     project_diagnostic: Option<Box<ProjectDiagnostic>>,
+    module_session: ModuleSession,
     vm_session: VmSession,
     vm_output: Option<VmOutput>,
     vm_diagnostic: Option<Box<VmDiagnostic>>,
@@ -549,6 +550,14 @@ async fn fresh_vm_session(world: &mut AnvilWorld) {
     world.vm_diagnostic = None;
 }
 
+#[given("a fresh module session")]
+async fn fresh_module_session(world: &mut AnvilWorld) {
+    world.module_session = ModuleSession::new();
+    world.vm_output = None;
+    world.vm_diagnostic = None;
+    world.module_diagnostic = None;
+}
+
 #[when("the VM session evaluates the input")]
 async fn vm_session_evaluates_input(world: &mut AnvilWorld) {
     match world.vm_session.eval_source(&world.source) {
@@ -589,6 +598,38 @@ async fn vm_session_evaluates_input_with_instruction_fuel(world: &mut AnvilWorld
         }
         Err(diagnostic) => {
             world.vm_output = None;
+            world.vm_diagnostic = Some(diagnostic);
+        }
+    }
+}
+
+#[when("the module session evaluates the input")]
+async fn module_session_evaluates_input(world: &mut AnvilWorld) {
+    match world.module_session.eval_source(&world.source) {
+        Ok(output) => {
+            world.vm_output = Some(output);
+            world.vm_diagnostic = None;
+            world.module_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.vm_output = None;
+            world.module_diagnostic = module_diagnostic_clone(&diagnostic);
+            world.vm_diagnostic = Some(diagnostic);
+        }
+    }
+}
+
+#[when(expr = "the module session evaluates {string}")]
+async fn module_session_evaluates_source(world: &mut AnvilWorld, source: String) {
+    match world.module_session.eval_source(&source) {
+        Ok(output) => {
+            world.vm_output = Some(output);
+            world.vm_diagnostic = None;
+            world.module_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.vm_output = None;
+            world.module_diagnostic = module_diagnostic_clone(&diagnostic);
             world.vm_diagnostic = Some(diagnostic);
         }
     }
@@ -757,6 +798,29 @@ async fn filesystem_workspace_snapshot_is_loaded(world: &mut AnvilWorld) {
             world.project_diagnostic = None;
             world.module_resolution = None;
             world.module_diagnostic = None;
+        }
+        Err(diagnostic) => {
+            world.project_diagnostic = Some(diagnostic);
+        }
+    }
+}
+
+#[when("the filesystem package module session is loaded")]
+async fn filesystem_package_module_session_is_loaded(world: &mut AnvilWorld) {
+    let root = world
+        .filesystem_package_root
+        .as_ref()
+        .expect("filesystem package root");
+
+    match load_workspace_snapshot(root) {
+        Ok(snapshot) => {
+            world.module_resolver = snapshot.module_resolver();
+            world.module_session = ModuleSession::with_workspace_snapshot(&snapshot);
+            world.project_diagnostic = None;
+            world.module_resolution = None;
+            world.module_diagnostic = None;
+            world.vm_output = None;
+            world.vm_diagnostic = None;
         }
         Err(diagnostic) => {
             world.project_diagnostic = Some(diagnostic);
@@ -1000,6 +1064,25 @@ async fn vm_session_binding_prints_as(world: &mut AnvilWorld, name: String, expe
         .unwrap_or_else(|| panic!("VM session binding {name}"));
 
     assert_eq!(value.to_string(), expected);
+}
+
+#[then(expr = "the module session binding {string} prints as {string}")]
+async fn module_session_binding_prints_as(world: &mut AnvilWorld, name: String, expected: String) {
+    let value = world
+        .module_session
+        .binding(&name)
+        .unwrap_or_else(|| panic!("module session binding {name}"));
+
+    assert_eq!(value.to_string(), expected);
+}
+
+#[then(expr = "the module session has loaded {string}")]
+async fn module_session_has_loaded(world: &mut AnvilWorld, source_id: String) {
+    assert!(
+        world.module_session.is_loaded(&source_id),
+        "loaded modules: {:?}",
+        world.module_session.loaded_source_ids()
+    );
 }
 
 #[then(expr = "the VM max call depth is {int}")]

@@ -9,9 +9,10 @@ Canonical planning notes:
 Implementation-facing decision:
 
 - Module resolution is deterministic, explicit, and manifest-oriented.
-- The first resolver core is intentionally in-memory. Manifest parsing,
-  filesystem walking, lockfile handling, and package registry integration are
-  later package-system slices.
+- The first resolver core is intentionally explicit and manifest-oriented.
+  It can be populated from in-memory package snapshots, filesystem packages,
+  workspaces, and draft overlays. Lockfile handling and package registry
+  integration are later package-system slices.
 - Resolution uses the locked precedence order:
   1. current package
   2. draft overlays
@@ -36,13 +37,22 @@ Implementation-facing decision:
 Current executable surface:
 
 - Core API: `ModuleResolver`, `ModuleRootKind`, `ModuleSource`,
-  `ModuleResolution`, and `ModuleCandidate`.
-- Gherkin: `specs/module_resolution.feature` and require-resolution scenarios
-  in `specs/ast_lowering.feature`.
+  `ModuleResolution`, `ModuleCandidate`, and `ModuleSession`.
+- `ModuleSession` wraps `VmSession` with a resolver plus source store. It loads
+  top-level require prefixes before evaluating the remaining forms, executes
+  each resolved module at most once per session, supports transitive requires,
+  detects require cycles, and leaves prior session state intact when a required
+  module fails.
+- CLI `run --package DIR` and `repl --package DIR` load a filesystem workspace
+  snapshot and evaluate through a module-aware session.
+- Gherkin: `specs/module_resolution.feature`, `specs/module_execution.feature`,
+  and require-resolution scenarios in `specs/ast_lowering.feature`.
 
 Open implementation dependencies:
 
-- Read `Anvil.toml` and `Anvil.lock`.
-- Index `src/`, workspace members, dependencies, standard-library roots, and
-  host module registrations.
-- Add draft overlay ownership, capability checks, and activation workflow.
+- Read `Anvil.lock`.
+- Index dependencies, standard-library roots, and host module registrations.
+- Add namespace export/import semantics for aliases, refer, rename, and private
+  bindings.
+- Add draft overlay ownership, capability checks, dynamic require authority,
+  and activation workflow.

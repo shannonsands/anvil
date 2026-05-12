@@ -78,6 +78,12 @@ matter to code structure.
   `packages/*`, loads member package snapshots, registers member modules as
   `workspace` roots, preserves root-package precedence, and surfaces missing
   member manifests through project-phase diagnostics.
+- Initial module execution exists through `ModuleSession`: package/workspace
+  sources can be loaded into a module-aware VM session, top-level require
+  prefixes are resolved and evaluated once per session, transitive requires are
+  supported, require cycles use module-phase diagnostics, and failed module
+  evaluation leaves prior session state intact. Alias/refer/export semantics are
+  explicit future work.
 - Initial bytecode VM foundation is register-based, source-mapped, and
   fuel-accounted. It executes top-level expression sequences, literals,
   quote-as-data, symbols and lists as data, vectors, ordered maps, `do`, `if`,
@@ -136,9 +142,10 @@ matter to code structure.
   rewind/fork, scheduler replay, effect barriers, and debug authority.
 - ETS-like runtime table semantics, persistence modes, watch/subscribe
   behavior, ownership, and access control.
-- Module execution semantics beyond resolution: dynamic require, draft
-  activation, module generations, bytecode cache invalidation, staged
-  replacement, rollback, and versioning.
+- Module execution semantics beyond the initial require-prefix session loader:
+  namespaces, aliases, refer/rename, exports, dynamic require, draft activation,
+  module generations, bytecode cache invalidation, staged replacement,
+  rollback, and versioning.
 - Macro system contract: CL-style compiler macros, reader macros, hygiene
   policy, expansion traces, macro capabilities, typed lowering, and declarative
   IR expansion.

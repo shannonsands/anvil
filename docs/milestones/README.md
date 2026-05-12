@@ -85,8 +85,14 @@ Current slice:
   function prototypes; failed interactions do not corrupt prior state.
 - The CLI `repl` command is VM-backed for complete interactive forms, while
   `read` remains a reader/diagnostic command.
-- Unsupported executable forms should fail with compile-phase diagnostics until
-  modules, host calls, and resource handles have their runtime contracts.
+- `ModuleSession` now gives package/workspace-aware sessions an executable
+  require prefix: modules resolve through the deterministic resolver, load once
+  per session, support transitive requires, detect cycles, and keep prior state
+  intact when a required module fails.
+- CLI `run --package DIR` and `repl --package DIR` use module-aware sessions.
+- Unsupported executable forms outside that session wrapper should fail with
+  compile-phase diagnostics until host calls and resource handles have their
+  runtime contracts.
 - The final value direction is now locked as tracing-GC-managed immutable
   language values with explicit mutable abstractions and supervisor-owned
   resource handles outside the ordinary heap.

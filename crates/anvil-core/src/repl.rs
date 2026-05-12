@@ -1,5 +1,6 @@
 use crate::{
     diagnostic::Diagnostic,
+    module_session::ModuleSession,
     reader::{ReaderDiagnostic, SpannedDatum, read_source},
     vm::{Value, VmDiagnostic, VmOutput, VmSession},
 };
@@ -104,12 +105,54 @@ pub struct ReplSession {
     buffer: String,
     pending: Option<ReaderDiagnostic>,
     buffered_lines: usize,
-    vm: VmSession,
+    evaluator: ReplEvaluator,
+}
+
+#[derive(Debug)]
+enum ReplEvaluator {
+    Vm(VmSession),
+    Module(ModuleSession),
+}
+
+impl Default for ReplEvaluator {
+    fn default() -> Self {
+        Self::Vm(VmSession::new())
+    }
+}
+
+impl ReplEvaluator {
+    fn eval_source(&mut self, source: &str) -> Result<VmOutput, Box<VmDiagnostic>> {
+        match self {
+            Self::Vm(session) => session.eval_source(source),
+            Self::Module(session) => session.eval_source(source),
+        }
+    }
+
+    fn vm(&self) -> &VmSession {
+        match self {
+            Self::Vm(session) => session,
+            Self::Module(session) => session.vm(),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self {
+            Self::Vm(session) => session.reset(),
+            Self::Module(session) => session.reset(),
+        }
+    }
 }
 
 impl ReplSession {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_module_session(module_session: ModuleSession) -> Self {
+        Self {
+            evaluator: ReplEvaluator::Module(module_session),
+            ..Self::default()
+        }
     }
 
     pub fn push_line(&mut self, line: &str) -> ReplInteraction {
@@ -118,7 +161,7 @@ impl ReplSession {
 
         match read_source(&self.buffer) {
             Ok(datums) => {
-                let evaluation = match self.vm.eval_source(&self.buffer) {
+                let evaluation = match self.evaluator.eval_source(&self.buffer) {
                     Ok(output) => EvaluationStatus::Value { output },
                     Err(diagnostic) => EvaluationStatus::Error { diagnostic },
                 };
@@ -155,11 +198,11 @@ impl ReplSession {
     }
 
     pub fn vm(&self) -> &VmSession {
-        &self.vm
+        self.evaluator.vm()
     }
 
     pub fn reset_vm(&mut self) {
-        self.vm.reset();
+        self.evaluator.reset();
     }
 }
 
@@ -232,6 +275,30 @@ mod tests {
             Some(&Value::Integer(42))
         );
         assert_eq!(session.vm().binding("answer"), Some(&Value::Integer(42)));
+    }
+
+    #[test]
+    fn session_can_evaluate_with_module_loader() {
+        let mut module_session = ModuleSession::new();
+        module_session.add_module_source(
+            crate::ModuleSource::new(
+                crate::ModuleRootKind::Package,
+                "planner-tools",
+                "planner.search",
+                "src/planner/search.anv",
+            ),
+            "(define answer 42)",
+        );
+        let mut session = ReplSession::with_module_session(module_session);
+
+        session.push_line("(require planner.search)\n");
+        let interaction = session.push_line("answer\n");
+        let response = interaction.response().expect("complete response");
+
+        assert_eq!(
+            response.evaluation().and_then(EvaluationStatus::value),
+            Some(&Value::Integer(42))
+        );
     }
 
     #[test]

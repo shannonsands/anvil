@@ -285,7 +285,7 @@ impl ModuleResolver {
 }
 
 impl ModuleSource {
-    fn source_id(&self) -> String {
+    pub fn source_id(&self) -> String {
         format!(
             "{}:{}:{}",
             self.root_kind_label(),

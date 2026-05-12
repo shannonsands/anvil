@@ -59,8 +59,10 @@ Implementation-facing decision:
 - Calling a non-function value fails at runtime with
   `ANVIL_RUNTIME_NOT_CALLABLE`; wrong function arity fails with
   `ANVIL_RUNTIME_ARITY`.
-- Unsupported executable forms such as `require` still fail during compilation
-  with `phase: compile` diagnostics.
+- Unsupported executable forms still fail during standalone VM compilation with
+  `phase: compile` diagnostics. `require` is executable only through the
+  module-aware `ModuleSession` wrapper, which resolves and loads top-level
+  require prefixes before handing ordinary forms to `VmSession`.
 - Runtime diagnostics use `phase: runtime` and preserve the current instruction
   span. The first runtime budget is instruction fuel.
 - `VmOutput` includes `max_call_depth` as an initial execution metric so tests,
@@ -72,7 +74,7 @@ Implementation-facing decision:
 
 Non-goals for this slice:
 
-- Local `define` semantics, host calls, modules at execution time, resource
+- Local `define` semantics, host calls, module namespaces/generations, resource
   handles, heap GC, actors, and debugger attachment.
 - Final scalar numeric representation. The bootstrap integer remains `i64`
   because exact `BigInt`/`Ratio` implementation is covered by the numeric

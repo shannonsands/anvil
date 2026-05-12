@@ -1,7 +1,13 @@
 use std::{
+    fs,
     io::Write,
+    path::PathBuf,
     process::{Command, Output, Stdio},
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
 };
+
+static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn run_anvil(args: &[&str], stdin: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_anvil-cli"))
@@ -117,6 +123,38 @@ fn run_command_reports_compile_diagnostics_as_json() {
 }
 
 #[test]
+fn run_command_can_require_package_modules() {
+    let package = TempPackage::new();
+    package.write(
+        "Anvil.toml",
+        r#"
+        [package]
+        name = "planner-tools"
+        version = "0.1.0"
+
+        [lib]
+        module = "planner.tools"
+        path = "src/lib.anv"
+        "#,
+    );
+    package.write("src/lib.anv", "(define root true)");
+    package.write("src/planner/search.anv", "(define answer 42)");
+
+    let output = run_anvil(
+        &[
+            "run",
+            "--package",
+            package.path_str(),
+            "(require planner.search) answer",
+        ],
+        "",
+    );
+
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    assert!(stdout_text(&output).contains("value 42"));
+}
+
+#[test]
 fn repl_reads_noninteractive_multiline_input() {
     let output = run_anvil(&["repl"], "(define answer\n42)\nanswer\n");
 
@@ -137,9 +175,83 @@ fn repl_preserves_state_in_json_mode() {
 }
 
 #[test]
+fn repl_can_require_package_modules() {
+    let package = TempPackage::new();
+    package.write(
+        "Anvil.toml",
+        r#"
+        [package]
+        name = "planner-tools"
+        version = "0.1.0"
+
+        [lib]
+        module = "planner.tools"
+        path = "src/lib.anv"
+        "#,
+    );
+    package.write("src/lib.anv", "(define root true)");
+    package.write("src/planner/search.anv", "(define answer 42)");
+
+    let output = run_anvil(
+        &["repl", "--package", package.path_str()],
+        "(require planner.search)\nanswer\n",
+    );
+
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    assert!(stdout_text(&output).contains("value 42"));
+}
+
+#[test]
 fn repl_rejects_unknown_options() {
     let output = run_anvil(&["repl", "--wat"], "");
 
     assert!(!output.status.success());
     assert!(stderr_text(&output).contains("unknown option for repl: --wat"));
+}
+
+struct TempPackage {
+    path: PathBuf,
+    path_str: String,
+}
+
+impl TempPackage {
+    fn new() -> Self {
+        let id = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("anvil-cli-test-{nanos}-{id}"));
+        fs::create_dir_all(&path).expect("create temp package");
+        let path_str = path.to_str().expect("temp path utf8").to_string();
+
+        Self { path, path_str }
+    }
+
+    fn path_str(&self) -> &str {
+        &self.path_str
+    }
+
+    fn write(&self, path: &str, contents: &str) {
+        let path = self.path.join(path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent directory");
+        }
+        fs::write(path, unindent(contents)).expect("write package file");
+    }
+}
+
+impl Drop for TempPackage {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn unindent(contents: &str) -> String {
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
