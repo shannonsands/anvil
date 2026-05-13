@@ -29,6 +29,9 @@ Feature: Host embedding contract
     Then the response envelope status is "error"
     And the response envelope diagnostic code is "ANVIL_RUNTIME_HOST_CAPABILITY_DENIED"
     And the host function call count is 0
+    When the embedded runtime facade is inspected
+    Then the embedded runtime audit contains "eval_denied" decision "denied"
+    And the embedded runtime audit contains diagnostic code "ANVIL_RUNTIME_HOST_CAPABILITY_DENIED"
 
   Scenario: Embedded runtime opens resources under the active profile
     Given a fresh embedded runtime "agent-runtime"
@@ -41,3 +44,25 @@ Feature: Host embedding contract
     When the embedded runtime facade is inspected
     Then the embedded runtime snapshot includes resource "markodb:papers"
     And the embedded runtime snapshot includes handle for resource "markodb:papers"
+    And the embedded runtime audit contains "resource_opened" decision "allowed"
+
+  Scenario: Embedded runtime composes profile fragments for activation
+    Given a fresh embedded runtime "agent-runtime"
+    And embedded capability profile "reader" for principal "agent.alpha" in trust zone "project.markodb" with capabilities "resource/open,resource/read"
+    And embedded capability profile "qbbn" for principal "agent.alpha" in trust zone "project.qbbn" with capabilities "qbbn/ask"
+    And embedded composed capability profile "agent.alpha.composed" from profiles "reader,qbbn"
+    When the embedded runtime activates profile "agent.alpha.composed"
+    And the embedded runtime facade is inspected
+    Then the embedded runtime snapshot includes profile "agent.alpha.composed"
+    And the embedded runtime audit contains "profile_composed" decision "allowed"
+    And the embedded runtime audit contains "profile_activated" decision "allowed"
+
+  Scenario: Embedded runtime audits denied resource opens
+    Given a fresh embedded runtime "agent-runtime"
+    And embedded resource "markodb:papers" of type "markodb.collection" exists in trust zone "project.markodb" with operations "read,write"
+    And embedded capability profile "readonly" for principal "agent.alpha" in trust zone "project.markodb" with capabilities "resource/open,resource/read"
+    When the embedded runtime activates profile "readonly"
+    And the embedded runtime opens resource "markodb:papers" with grants "write"
+    Then the resource denial reason is "capability_denied"
+    When the embedded runtime facade is inspected
+    Then the embedded runtime audit contains "resource_open_denied" decision "denied"

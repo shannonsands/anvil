@@ -125,7 +125,9 @@ matter to code structure.
   profiles gate resource open, operation use, adapter execution, delegation,
   and revocation, with `capability_denied` diagnostics and
   `capability_profiles.feature` acceptance coverage for principal, trust-zone,
-  generic, and domain-specific capability behavior.
+  generic, and domain-specific capability behavior. `CapabilityPolicy` now
+  composes registered profile fragments for the same principal, unioning trust
+  zones and capabilities while explicit denials continue to win.
 - Initial synchronous host-function integration exists in `anvil-core`: hosts
   register explicit named callbacks with arity, optional required capability,
   optional trust zone metadata, and optional typed signature metadata.
@@ -139,8 +141,10 @@ matter to code structure.
   depend on VM internals.
 - Initial embedded-runtime facade exists in `anvil-core`: `EmbeddedRuntime`
   wraps module-aware evaluation, host function registration, resource
-  registration, handle opening, capability profile registration/activation, VM
-  budgets, and inspectable `EmbeddedRuntimeSnapshot` metadata.
+  registration, handle opening, capability profile registration/composition/
+  activation, VM budgets, inspectable `EmbeddedRuntimeSnapshot` metadata, and a
+  facade-visible audit log for profile activation, host authority denials, and
+  resource open decisions.
 - MightyGrad remains an independent backend project. Anvil integrates through a
   backend adapter when the compute IR is ready.
 
@@ -154,8 +158,9 @@ matter to code structure.
   beyond the initial tracing-GC contract.
 - Async, streaming, blocking, actor-backed, and device-backed runners behind
   the initial resource adapter and host-function execution contracts.
-- Capability profile composition, persistent policy storage, approval flows,
-  and audit sinks beyond the first resource operation checks.
+- Persistent policy storage, approval flows, durable audit sinks, and richer
+  policy manifests beyond the first in-memory profile composition and facade
+  audit log.
 - Concrete runtime syntax for `defactor`, supervisors, atoms, channels,
   task groups, PubSub, hooks, watchers, event streams, and reactive forms.
 - Debugger and attach semantics: breakpoints, frame inspection, debug eval,

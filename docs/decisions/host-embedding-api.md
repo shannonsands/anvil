@@ -39,10 +39,15 @@ Implementation-facing decision:
   VM runtime diagnostics rather than host-language transport errors.
 - `EmbeddedRuntime` is the first Rust runtime facade. It wraps a
   `ModuleSession`, owns a resource registry and handle table, stores registered
-  capability profiles, activates a profile onto the VM/module session, evaluates
-  source through `EvalResponse`, opens resources under the active profile when
-  one exists, and emits `EmbeddedRuntimeSnapshot` metadata with
-  `protocol: anvil.embedding.v1`.
+  capability profiles in a `CapabilityPolicy`, composes profile fragments,
+  activates a profile onto the VM/module session, evaluates source through
+  `EvalResponse`, opens resources under the active profile when one exists, and
+  emits `EmbeddedRuntimeSnapshot` metadata with `protocol:
+  anvil.embedding.v1`.
+- `EmbeddedRuntimeSnapshot` includes the first facade-visible runtime audit log:
+  profile composition, profile activation, host-authority denials during eval,
+  and resource-open allow/deny events. This is in-memory and inspectable; durable
+  audit sinks and response-facet retention remain later work.
 - Host functions are not ordinary first-class Anvil values yet. The current
   contract is a direct-call import surface for embedded runtimes; first-class
   function/resource values, async calls, streams, actor-backed services, and
@@ -65,8 +70,9 @@ The core pieces that still need dedicated implementation are:
 
 - Language-level sandbox/process objects: private stacks, mailboxes, roots,
   task state, cancellation, and supervisor ownership.
-- Capability composition beyond single profiles: roles/groups, manifest policy,
-  approvals, audit sinks, revocation propagation, and persistent policy storage.
+- Capability policy beyond in-memory same-principal composition: roles/groups,
+  manifest policy, approvals, durable audit sinks, revocation propagation, and
+  persistent policy storage.
 - Runtime concurrency forms and scheduler: lightweight tasks, actors, atoms,
   PubSub, hooks, watchers, process supervision, and bounded `pmap`.
 - GC/root integration: tracing heap, process roots, actor roots, handle-table
@@ -79,6 +85,6 @@ The core pieces that still need dedicated implementation are:
   state migration.
 
 Open implementation dependency: async/streaming host runners, actor-backed
-services, result ids, response/facet retention, and TypeScript/WASM transport
-adapters need concrete Rust types on top of `EmbeddedRuntime` before bindings
-can be built.
+services, result ids, response/facet retention, durable audit sinks, and
+TypeScript/WASM transport adapters need concrete Rust types on top of
+`EmbeddedRuntime` before bindings can be built.

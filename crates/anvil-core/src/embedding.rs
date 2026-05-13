@@ -1,13 +1,14 @@
-use std::collections::BTreeMap;
-
 use serde::Serialize;
 
 use crate::{
-    capability::CapabilityProfile,
+    capability::{CapabilityPolicy, CapabilityPolicyError, CapabilityProfile},
     host::{HostCallContext, HostCallResult, HostFunctionRegistry, HostFunctionSpec},
     module_session::ModuleSession,
-    resource::{HandleEntry, HandleTable, ResourceEntry, ResourceOpenRequest, ResourceRegistry},
-    response::{EvalResponse, ResponseOptions},
+    resource::{
+        HandleEntry, HandleTable, ResourceDenialReason, ResourceEntry, ResourceOpenRequest,
+        ResourceRegistry,
+    },
+    response::{EvalResponse, ResponseOptions, ResponseStatus},
     source::SourceText,
     vm::{Value, VmBudget},
 };
@@ -40,7 +41,8 @@ pub struct EmbeddedRuntime {
     session: ModuleSession,
     resources: ResourceRegistry,
     handles: HandleTable,
-    profiles: BTreeMap<String, CapabilityProfile>,
+    policy: CapabilityPolicy,
+    audit_events: Vec<EmbeddedRuntimeAuditEvent>,
     active_profile_id: Option<String>,
 }
 
@@ -58,7 +60,8 @@ impl EmbeddedRuntime {
             session,
             resources: ResourceRegistry::new(),
             handles: HandleTable::new(),
-            profiles: BTreeMap::new(),
+            policy: CapabilityPolicy::new(),
+            audit_events: Vec::new(),
             active_profile_id: None,
         }
     }
@@ -68,15 +71,21 @@ impl EmbeddedRuntime {
     }
 
     pub fn eval(&mut self, source: &str) -> EvalResponse {
-        self.session.eval_response(source)
+        let response = self.session.eval_response(source);
+        self.record_eval_authority_denial(&response);
+        response
     }
 
     pub fn eval_with_options(&mut self, source: &str, options: ResponseOptions) -> EvalResponse {
-        self.session.eval_response_with_options(source, options)
+        let response = self.session.eval_response_with_options(source, options);
+        self.record_eval_authority_denial(&response);
+        response
     }
 
     pub fn eval_source_text(&mut self, source: &SourceText) -> EvalResponse {
-        self.session.eval_source_text_response(source)
+        let response = self.session.eval_source_text_response(source);
+        self.record_eval_authority_denial(&response);
+        response
     }
 
     pub fn eval_source_text_with_options(
@@ -84,8 +93,11 @@ impl EmbeddedRuntime {
         source: &SourceText,
         options: ResponseOptions,
     ) -> EvalResponse {
-        self.session
-            .eval_source_text_response_with_options(source, options)
+        let response = self
+            .session
+            .eval_source_text_response_with_options(source, options);
+        self.record_eval_authority_denial(&response);
+        response
     }
 
     pub fn register_host_function<F>(&mut self, spec: HostFunctionSpec, function: F)
@@ -100,26 +112,67 @@ impl EmbeddedRuntime {
     }
 
     pub fn register_profile(&mut self, profile: CapabilityProfile) {
-        self.profiles.insert(profile.profile_id.clone(), profile);
+        self.policy.register_profile(profile);
+    }
+
+    pub fn register_composed_profile<I, S>(
+        &mut self,
+        profile_id: impl Into<String>,
+        component_ids: I,
+    ) -> Result<CapabilityProfile, EmbeddedRuntimeError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let profile = self
+            .policy
+            .compose_profile(profile_id, component_ids)
+            .map_err(EmbeddedRuntimeError::from)?;
+        self.record_audit_event(
+            EmbeddedRuntimeAuditEvent::allowed(
+                EmbeddedRuntimeAuditKind::ProfileComposed,
+                &self.config.runtime_id,
+            )
+            .with_profile(&profile),
+        );
+        self.policy.register_profile(profile.clone());
+        Ok(profile)
     }
 
     pub fn activate_profile(&mut self, profile_id: &str) -> Result<(), EmbeddedRuntimeError> {
-        let profile =
-            self.profiles
-                .get(profile_id)
-                .cloned()
-                .ok_or_else(|| EmbeddedRuntimeError {
+        let profile = match self.policy.profile(profile_id).cloned() {
+            Some(profile) => profile,
+            None => {
+                let error = EmbeddedRuntimeError {
                     kind: EmbeddedRuntimeErrorKind::ProfileNotFound,
                     message: format!("capability profile {profile_id} is not registered"),
-                    expected: self.profiles.keys().cloned().collect(),
+                    expected: self.policy.profile_ids().cloned().collect(),
                     actual: Some(profile_id.to_string()),
                     suggestion: Some(
                         "Register the profile before activating it for this runtime.".to_string(),
                     ),
-                })?;
+                };
+                self.record_audit_event(
+                    EmbeddedRuntimeAuditEvent::denied(
+                        EmbeddedRuntimeAuditKind::ProfileActivationDenied,
+                        &self.config.runtime_id,
+                    )
+                    .with_profile_id(profile_id)
+                    .with_message(&error.message),
+                );
+                return Err(error);
+            }
+        };
 
-        self.session.set_capability_profile(profile);
+        self.session.set_capability_profile(profile.clone());
         self.active_profile_id = Some(profile_id.to_string());
+        self.record_audit_event(
+            EmbeddedRuntimeAuditEvent::allowed(
+                EmbeddedRuntimeAuditKind::ProfileActivated,
+                &self.config.runtime_id,
+            )
+            .with_profile(&profile),
+        );
         Ok(())
     }
 
@@ -131,7 +184,7 @@ impl EmbeddedRuntime {
     pub fn active_profile(&self) -> Option<&CapabilityProfile> {
         self.active_profile_id
             .as_deref()
-            .and_then(|profile_id| self.profiles.get(profile_id))
+            .and_then(|profile_id| self.policy.profile(profile_id))
     }
 
     pub fn open_resource(
@@ -145,14 +198,39 @@ impl EmbeddedRuntime {
             .as_ref()
             .map(|profile| profile.principal.clone())
             .unwrap_or_else(|| self.config.runtime_id.clone());
-        let request = ResourceOpenRequest::new(holder, resource_id, grants);
+        let request = ResourceOpenRequest::new(holder, resource_id.clone(), grants);
 
-        if let Some(profile) = profile.as_ref() {
+        let result = if let Some(profile) = profile.as_ref() {
             self.resources
                 .open_handle_with_profile(&mut self.handles, profile, request)
         } else {
             self.resources.open_handle(&mut self.handles, request)
+        };
+
+        match &result {
+            Ok(handle) => self.record_audit_event(
+                EmbeddedRuntimeAuditEvent::allowed(
+                    EmbeddedRuntimeAuditKind::ResourceOpened,
+                    &self.config.runtime_id,
+                )
+                .with_profile_opt(profile.as_ref())
+                .with_resource(&handle.resource_id, "open")
+                .with_trust_zone(&handle.trust_zone),
+            ),
+            Err(error) => self.record_audit_event(
+                EmbeddedRuntimeAuditEvent::denied(
+                    EmbeddedRuntimeAuditKind::ResourceOpenDenied,
+                    &self.config.runtime_id,
+                )
+                .with_profile_opt(profile.as_ref())
+                .with_resource(&resource_id, "open")
+                .with_resource_denial(error.denial.reason)
+                .with_capability_opt(error.denial.missing_capability.as_deref())
+                .with_message(error.diagnostic.message.as_str()),
+            ),
         }
+
+        result
     }
 
     pub fn host_functions(&self) -> &HostFunctionRegistry {
@@ -168,7 +246,15 @@ impl EmbeddedRuntime {
     }
 
     pub fn profiles(&self) -> impl Iterator<Item = &CapabilityProfile> {
-        self.profiles.values()
+        self.policy.profiles()
+    }
+
+    pub fn policy(&self) -> &CapabilityPolicy {
+        &self.policy
+    }
+
+    pub fn audit_events(&self) -> &[EmbeddedRuntimeAuditEvent] {
+        &self.audit_events
     }
 
     pub fn session(&self) -> &ModuleSession {
@@ -186,10 +272,50 @@ impl EmbeddedRuntime {
             default_budget: self.config.default_budget,
             active_profile_id: self.active_profile_id.clone(),
             host_functions: self.host_functions().specs().into_iter().cloned().collect(),
-            profiles: self.profiles.values().cloned().collect(),
+            profiles: self.policy.profiles().cloned().collect(),
             resources: self.resources.resources().cloned().collect(),
             handles: self.handles.handles().cloned().collect(),
+            audit_events: self.audit_events.clone(),
         }
+    }
+
+    fn record_eval_authority_denial(&mut self, response: &EvalResponse) {
+        if response.status != ResponseStatus::Error {
+            return;
+        }
+
+        let Some(diagnostic) = response.primary_diagnostic() else {
+            return;
+        };
+
+        if !matches!(
+            diagnostic.code,
+            "ANVIL_RUNTIME_HOST_PROFILE_REQUIRED"
+                | "ANVIL_RUNTIME_HOST_TRUST_ZONE_DENIED"
+                | "ANVIL_RUNTIME_HOST_CAPABILITY_DENIED"
+        ) {
+            return;
+        }
+
+        let profile = self.active_profile().cloned();
+        self.record_audit_event(
+            EmbeddedRuntimeAuditEvent::denied(
+                EmbeddedRuntimeAuditKind::EvalDenied,
+                &self.config.runtime_id,
+            )
+            .with_profile_opt(profile.as_ref())
+            .with_diagnostic(diagnostic.code)
+            .with_message(&diagnostic.message),
+        );
+    }
+
+    fn record_audit_event(&mut self, mut event: EmbeddedRuntimeAuditEvent) {
+        event.event_id = format!(
+            "audit:{}:{}",
+            sanitize_audit_part(&self.config.runtime_id),
+            self.audit_events.len() + 1
+        );
+        self.audit_events.push(event);
     }
 }
 
@@ -214,6 +340,134 @@ pub struct EmbeddedRuntimeSnapshot {
     pub resources: Vec<ResourceEntry>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub handles: Vec<HandleEntry>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub audit_events: Vec<EmbeddedRuntimeAuditEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EmbeddedRuntimeAuditEvent {
+    pub event_id: String,
+    pub kind: EmbeddedRuntimeAuditKind,
+    pub decision: EmbeddedRuntimeAuditDecision,
+    pub runtime_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_zone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_denial: Option<ResourceDenialReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl EmbeddedRuntimeAuditEvent {
+    fn allowed(kind: EmbeddedRuntimeAuditKind, runtime_id: &str) -> Self {
+        Self::new(kind, EmbeddedRuntimeAuditDecision::Allowed, runtime_id)
+    }
+
+    fn denied(kind: EmbeddedRuntimeAuditKind, runtime_id: &str) -> Self {
+        Self::new(kind, EmbeddedRuntimeAuditDecision::Denied, runtime_id)
+    }
+
+    fn new(
+        kind: EmbeddedRuntimeAuditKind,
+        decision: EmbeddedRuntimeAuditDecision,
+        runtime_id: &str,
+    ) -> Self {
+        Self {
+            event_id: String::new(),
+            kind,
+            decision,
+            runtime_id: runtime_id.to_string(),
+            profile_id: None,
+            principal: None,
+            trust_zone: None,
+            capability: None,
+            resource_id: None,
+            operation: None,
+            resource_denial: None,
+            diagnostic_code: None,
+            message: None,
+        }
+    }
+
+    fn with_profile(mut self, profile: &CapabilityProfile) -> Self {
+        self.profile_id = Some(profile.profile_id.clone());
+        self.principal = Some(profile.principal.clone());
+        self
+    }
+
+    fn with_profile_opt(self, profile: Option<&CapabilityProfile>) -> Self {
+        if let Some(profile) = profile {
+            self.with_profile(profile)
+        } else {
+            self
+        }
+    }
+
+    fn with_profile_id(mut self, profile_id: &str) -> Self {
+        self.profile_id = Some(profile_id.to_string());
+        self
+    }
+
+    fn with_resource(mut self, resource_id: &str, operation: &str) -> Self {
+        self.resource_id = Some(resource_id.to_string());
+        self.operation = Some(operation.to_string());
+        self
+    }
+
+    fn with_trust_zone(mut self, trust_zone: &str) -> Self {
+        self.trust_zone = Some(trust_zone.to_string());
+        self
+    }
+
+    fn with_capability_opt(mut self, capability: Option<&str>) -> Self {
+        self.capability = capability.map(ToString::to_string);
+        self
+    }
+
+    fn with_resource_denial(mut self, reason: ResourceDenialReason) -> Self {
+        self.resource_denial = Some(reason);
+        self
+    }
+
+    fn with_diagnostic(mut self, code: &str) -> Self {
+        self.diagnostic_code = Some(code.to_string());
+        self
+    }
+
+    fn with_message(mut self, message: &str) -> Self {
+        self.message = Some(message.to_string());
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddedRuntimeAuditKind {
+    ProfileActivated,
+    ProfileActivationDenied,
+    ProfileComposed,
+    ResourceOpened,
+    ResourceOpenDenied,
+    EvalDenied,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddedRuntimeAuditDecision {
+    Allowed,
+    Denied,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -231,6 +485,32 @@ pub struct EmbeddedRuntimeError {
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddedRuntimeErrorKind {
     ProfileNotFound,
+    PolicyError,
+}
+
+impl From<CapabilityPolicyError> for EmbeddedRuntimeError {
+    fn from(error: CapabilityPolicyError) -> Self {
+        Self {
+            kind: EmbeddedRuntimeErrorKind::PolicyError,
+            message: error.message,
+            expected: error.expected,
+            actual: error.actual,
+            suggestion: error.suggestion,
+        }
+    }
+}
+
+fn sanitize_audit_part(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -320,6 +600,96 @@ mod tests {
     }
 
     #[test]
+    fn composed_profiles_can_be_registered_activated_and_audited() {
+        let mut runtime = EmbeddedRuntime::new("agent-runtime");
+        runtime.register_profile(
+            CapabilityProfile::new("reader", "agent.alpha", "project.markodb")
+                .with_capabilities(["resource/open", "resource/read"]),
+        );
+        runtime.register_profile(
+            CapabilityProfile::new("qbbn", "agent.alpha", "project.qbbn")
+                .with_capability("qbbn/ask"),
+        );
+
+        let profile = runtime
+            .register_composed_profile("agent.alpha.composed", ["reader", "qbbn"])
+            .expect("composed profile");
+        runtime
+            .activate_profile("agent.alpha.composed")
+            .expect("profile activated");
+
+        assert_eq!(profile.principal, "agent.alpha");
+        assert!(runtime.policy().profile("agent.alpha.composed").is_some());
+        assert_eq!(
+            runtime.active_profile().expect("active profile").profile_id,
+            "agent.alpha.composed"
+        );
+        assert_eq!(runtime.audit_events().len(), 2);
+        assert_eq!(
+            runtime.audit_events()[0].kind,
+            EmbeddedRuntimeAuditKind::ProfileComposed
+        );
+        assert_eq!(
+            runtime.audit_events()[1].decision,
+            EmbeddedRuntimeAuditDecision::Allowed
+        );
+    }
+
+    #[test]
+    fn runtime_audit_log_records_authority_denials_and_resource_opens() {
+        let mut runtime = EmbeddedRuntime::new("agent-runtime");
+        runtime.register_host_function(
+            HostFunctionSpec::new("host/secret")
+                .with_exact_arity(0)
+                .with_required_capability("host/secret")
+                .with_trust_zone("project.markodb"),
+            |_context, _args| Ok(Value::Keyword("authorized".to_string())),
+        );
+        runtime.register_profile(
+            CapabilityProfile::new("readonly", "agent.alpha", "project.markodb")
+                .with_capability("host/read"),
+        );
+        runtime
+            .activate_profile("readonly")
+            .expect("profile activated");
+
+        let response = runtime.eval("(host/secret)");
+
+        assert_eq!(response.status, crate::response::ResponseStatus::Error);
+        assert!(
+            runtime.audit_events().iter().any(|event| {
+                event.kind == EmbeddedRuntimeAuditKind::EvalDenied
+                    && event.diagnostic_code.as_deref()
+                        == Some("ANVIL_RUNTIME_HOST_CAPABILITY_DENIED")
+            }),
+            "{:?}",
+            runtime.audit_events()
+        );
+
+        runtime.register_resource(
+            ResourceEntry::new(
+                "markodb:papers",
+                "markodb.collection",
+                "runtime",
+                "project.markodb",
+            )
+            .with_operation("read", "read"),
+        );
+        runtime
+            .open_resource("markodb:papers", vec!["read".to_string()])
+            .expect_err("profile missing resource/read capability");
+
+        assert!(
+            runtime.audit_events().iter().any(|event| {
+                event.kind == EmbeddedRuntimeAuditKind::ResourceOpenDenied
+                    && event.resource_denial == Some(ResourceDenialReason::CapabilityDenied)
+            }),
+            "{:?}",
+            runtime.audit_events()
+        );
+    }
+
+    #[test]
     fn resource_open_without_active_profile_uses_runtime_holder() {
         let mut runtime = EmbeddedRuntime::new("agent-runtime");
         runtime.register_resource(
@@ -370,6 +740,14 @@ mod tests {
         assert_eq!(missing.kind, EmbeddedRuntimeErrorKind::ProfileNotFound);
         assert_eq!(missing.expected, vec!["readonly"]);
         assert_eq!(missing.actual.as_deref(), Some("writer"));
+        assert_eq!(
+            runtime.audit_events()[0].kind,
+            EmbeddedRuntimeAuditKind::ProfileActivationDenied
+        );
+        assert_eq!(
+            runtime.audit_events()[0].decision,
+            EmbeddedRuntimeAuditDecision::Denied
+        );
 
         runtime
             .activate_profile("readonly")
@@ -388,6 +766,39 @@ mod tests {
 
         assert!(runtime.active_profile().is_none());
         assert!(runtime.session().capability_profile().is_none());
+    }
+
+    #[test]
+    fn composed_profile_errors_are_structured_runtime_errors() {
+        let mut runtime = EmbeddedRuntime::new("agent-runtime");
+        runtime.register_profile(CapabilityProfile::new(
+            "alpha",
+            "agent.alpha",
+            "project.markodb",
+        ));
+        runtime.register_profile(CapabilityProfile::new(
+            "beta",
+            "agent.beta",
+            "project.markodb",
+        ));
+
+        let empty = runtime
+            .register_composed_profile("empty", Vec::<String>::new())
+            .expect_err("empty composition");
+        assert_eq!(empty.kind, EmbeddedRuntimeErrorKind::PolicyError);
+        assert_eq!(empty.expected, vec!["one or more profile ids"]);
+
+        let missing = runtime
+            .register_composed_profile("missing", ["alpha", "absent"])
+            .expect_err("missing composition");
+        assert_eq!(missing.kind, EmbeddedRuntimeErrorKind::PolicyError);
+        assert_eq!(missing.actual.as_deref(), Some("absent"));
+
+        let mismatch = runtime
+            .register_composed_profile("mixed", ["alpha", "beta"])
+            .expect_err("cross-principal composition");
+        assert_eq!(mismatch.kind, EmbeddedRuntimeErrorKind::PolicyError);
+        assert_eq!(mismatch.actual.as_deref(), Some("principal:agent.beta"));
     }
 
     #[test]

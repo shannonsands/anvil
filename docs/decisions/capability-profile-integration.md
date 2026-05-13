@@ -34,6 +34,15 @@ Implementation-facing decision:
   capability and trust zone. When either is present, `VmSession`/`ModuleSession`
   require an active `CapabilityProfile` and deny before Rust callback invocation
   if the profile lacks the trust zone or capability.
+- `CapabilityPolicy` is the first in-memory policy container. It stores
+  registered profile fragments and can compose a new profile from existing
+  fragments when all components share the same principal. Composition unions
+  trust zones and capabilities, and explicit denied capabilities still override
+  grants.
+- `EmbeddedRuntime` owns a `CapabilityPolicy` and an inspectable runtime audit
+  log. Profile composition, profile activation, host-authority denials during
+  eval, and resource-open allow/deny decisions are visible in
+  `EmbeddedRuntimeSnapshot`.
 
 ## Implementation Status
 
@@ -52,14 +61,20 @@ Implemented in this slice:
   agent-facing profile contract.
 - Host-call profile checks in `crates/anvil-core/src/vm.rs`, covered by
   `specs/host_functions.feature`.
+- `CapabilityPolicy` profile composition in
+  `crates/anvil-core/src/capability.rs`.
+- Embedded profile composition and authority audit events in
+  `crates/anvil-core/src/embedding.rs`, covered by
+  `specs/embedding_contract.feature`.
 
 Not implemented yet:
 
-- Manifest/profile composition across packages, modules, principals, roles, and
+- Manifest-driven profile composition across packages, modules, roles, and
   resource policies.
-- Budget, approval, and audit-sink integration beyond current denial events.
-- Full host-call audit events, profile composition, and approval flows beyond
-  the initial VM diagnostic path.
+- Budget, approval, and durable audit-sink integration beyond the current
+  in-memory facade audit log.
+- Full host-call/resource operation audit facets on `EvalResponse`, beyond the
+  current embedded-runtime snapshot log.
 - TypeScript, WASM, or transport facade profile registration.
 - Persistent profile storage or policy editing.
 

@@ -145,16 +145,21 @@ Current implementation slice:
   embedding wrappers and future transport bindings.
 - `anvil-core` now has `EmbeddedRuntime`, the first Rust host facade over
   module-aware eval, host functions, resource registration, handle opening,
-  capability profile registration/activation, default VM budget, and
-  inspectable `EmbeddedRuntimeSnapshot` metadata.
+  capability profile registration/composition/activation, default VM budget,
+  inspectable `EmbeddedRuntimeSnapshot` metadata, and facade-visible runtime
+  audit events for profile activation, host authority denial, and resource-open
+  decisions.
 - `embedding_contract.feature` covers eval envelopes, facade inspection, host
   function registration, active-profile host mediation, and resource opens
   under the active profile.
+- `CapabilityPolicy` composes same-principal profile fragments in memory,
+  unioning trust zones/capabilities while preserving explicit denials.
 
 Remaining M4 work:
 
 - Async, streaming, blocking, and actor-backed host runners.
 - Result ids, response/facet retention, and facet lookup.
 - TypeScript/WASM transport bindings over the Rust facade.
-- Profile composition, policy persistence, approval flows, and audit sinks.
+- Manifest-backed policy persistence, approval flows, durable audit sinks, and
+  role/group semantics beyond in-memory same-principal composition.
 - Full host-call/resource audit events in response facets.

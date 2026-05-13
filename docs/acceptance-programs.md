@@ -94,8 +94,9 @@ The first executable acceptance harness is intentionally tiny but real:
   value serialization, VM execution metadata, and opt-in debug facets.
 - `embedding_contract.feature` covers the first host embedding facade:
   `EmbeddedRuntime` eval through response envelopes, facade inspection,
-  registered host functions, active profile mediation, and resource handle open
-  under the active profile.
+  registered host functions, active profile mediation, composed profile
+  fragments, resource handle open under the active profile, and runtime audit
+  visibility for allowed/denied authority decisions.
 
 This keeps acceptance behavior cargo-shaped while leaving room for richer
 spec linting, coverage mapping, eval artifacts, and agent-readable reports as

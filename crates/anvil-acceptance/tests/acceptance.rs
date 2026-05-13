@@ -759,6 +759,17 @@ async fn embedded_capability_profile(
     ));
 }
 
+#[given(expr = "embedded composed capability profile {string} from profiles {string}")]
+async fn embedded_composed_capability_profile(
+    world: &mut AnvilWorld,
+    profile_id: String,
+    component_ids: String,
+) {
+    embedded_runtime(world)
+        .register_composed_profile(profile_id.clone(), split_csv(&component_ids))
+        .unwrap_or_else(|error| panic!("compose profile {profile_id}: {error:?}"));
+}
+
 #[when("the VM session evaluates the input")]
 async fn vm_session_evaluates_input(world: &mut AnvilWorld) {
     match world.vm_session.eval_source(&world.source) {
@@ -2106,6 +2117,19 @@ async fn embedded_runtime_snapshot_includes_host_function(
     );
 }
 
+#[then(expr = "the embedded runtime snapshot includes profile {string}")]
+async fn embedded_runtime_snapshot_includes_profile(world: &mut AnvilWorld, expected: String) {
+    let snapshot = embedded_snapshot(world);
+
+    assert!(
+        snapshot
+            .profiles
+            .iter()
+            .any(|profile| profile.profile_id == expected),
+        "missing profile {expected:?}: {snapshot:?}"
+    );
+}
+
 #[then(expr = "the embedded runtime host function {string} exact arity is {int}")]
 async fn embedded_runtime_host_function_exact_arity_is(
     world: &mut AnvilWorld,
@@ -2149,6 +2173,39 @@ async fn embedded_runtime_snapshot_includes_handle_for_resource(
             .iter()
             .any(|handle| handle.resource_id == expected),
         "missing handle for resource {expected:?}: {snapshot:?}"
+    );
+}
+
+#[then(expr = "the embedded runtime audit contains {string} decision {string}")]
+async fn embedded_runtime_audit_contains_decision(
+    world: &mut AnvilWorld,
+    expected_kind: String,
+    expected_decision: String,
+) {
+    let snapshot = embedded_snapshot(world);
+    let events = serde_json::to_value(&snapshot.audit_events).expect("audit events JSON");
+    let events = events.as_array().expect("audit events array");
+
+    assert!(
+        events.iter().any(|event| {
+            event["kind"].as_str() == Some(expected_kind.as_str())
+                && event["decision"].as_str() == Some(expected_decision.as_str())
+        }),
+        "missing audit event kind {expected_kind:?} decision {expected_decision:?}: {events:?}"
+    );
+}
+
+#[then(expr = "the embedded runtime audit contains diagnostic code {string}")]
+async fn embedded_runtime_audit_contains_diagnostic_code(world: &mut AnvilWorld, expected: String) {
+    let snapshot = embedded_snapshot(world);
+
+    assert!(
+        snapshot
+            .audit_events
+            .iter()
+            .any(|event| event.diagnostic_code.as_deref() == Some(expected.as_str())),
+        "missing audit diagnostic code {expected:?}: {:?}",
+        snapshot.audit_events
     );
 }
 
